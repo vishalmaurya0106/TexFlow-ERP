@@ -1,0 +1,78 @@
+{
+  "entities": {
+    "companies": {
+      "fields": {
+        "companyId": { "type": "string", "description": "Unique company ID" },
+        "name": { "type": "string", "description": "Company name" }
+      }
+    },
+    "workers": {
+      "fields": {
+        "workerId": { "type": "string", "description": "Worker ID / Code No" },
+        "name": { "type": "string", "description": "Full Name of worker" },
+        "mobileNumber": { "type": "string", "description": "Phone number" },
+        "address": { "type": "string", "description": "Residential address" },
+        "joiningDate": { "type": "string", "description": "Date of joining" },
+        "bankDetails": { "type": "object", "description": "Bank account info" },
+        "aadhaarNumber": { "type": "string", "description": "Aadhaar Card number" },
+        "isActive": { "type": "boolean", "description": "Whether employee is active" },
+        "perMachineRate": { "type": "number", "description": "Per machine rate / daily rate" },
+        "monthlySalary": { "type": "number", "description": "Monthly fixed salary if applicable" },
+        "monthlyDays": { "type": "number", "description": "Monthly days" },
+        "employeeType": { "type": "string", "description": "Worker | Admin Employee | Others" },
+        "companyName": { "type": "string", "description": "Associated company" }
+      }
+    },
+    "machines": {
+      "fields": {
+        "machineId": { "type": "string", "description": "Machine code or number" },
+        "isActive": { "type": "boolean", "description": "Machine status" },
+        "companyName": { "type": "string", "description": "Company name" }
+      }
+    },
+    "daily_works": {
+      "fields": {
+        "workId": { "type": "string", "description": "Unique production record ID" },
+        "workerId": { "type": "string", "description": "Worker ID" },
+        "date": { "type": "string", "description": "Date YYYY-MM-DD" },
+        "selectedMachines": { "type": "array", "description": "Array of machine IDs" },
+        "machineCount": { "type": "number", "description": "Number of machines" },
+        "perMachineRate": { "type": "number", "description": "Rate per machine" },
+        "calculatedWage": { "type": "number", "description": "Calculated total wage" },
+        "shift": { "type": "string", "description": "Day or Night shift" }
+      }
+    },
+    "admin_attendances": {
+      "fields": {
+        "adminAttendanceId": { "type": "string", "description": "Unique ID" },
+        "workerId": { "type": "string", "description": "Worker ID" },
+        "date": { "type": "string", "description": "Date YYYY-MM-DD" },
+        "status": { "type": "string", "description": "Present | Absent | Half Day" },
+        "calculatedWage": { "type": "number", "description": "Calculated wage" }
+      }
+    },
+    "attendances": {
+      "fields": {
+        "attendanceId": { "type": "string", "description": "Unique ID" },
+        "workerId": { "type": "string", "description": "Worker ID" },
+        "date": { "type": "string", "description": "Date YYYY-MM-DD" },
+        "status": { "type": "string", "description": "Present | Absent | Half Day" },
+        "inTime": { "type": "string", "description": "Check in time" },
+        "outTime": { "type": "string", "description": "Check out time" }
+      }
+    },
+    "salaries": {
+      "fields": {
+        "salaryId": { "type": "string", "description": "Unique Salary ledger ID" },
+        "workerId": { "type": "string", "description": "Worker ID" },
+        "month": { "type": "string", "description": "Month YYYY-MM" },
+        "baseSalary": { "type": "number", "description": "Base salary accumulation" },
+        "bonus": { "type": "number", "description": "Bonus additions" },
+        "advance": { "type": "number", "description": "Advance deductions" },
+        "deductions": { "type": "number", "description": "Other deductions" },
+        "netSalary": { "type": "number", "description": "Final net wage" },
+        "status": { "type": "string", "description": "Pending | Paid" }
+      }
+    }
+  }
+}
