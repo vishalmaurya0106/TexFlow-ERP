@@ -1002,6 +1002,7 @@ export default function App() {
                   salaries={salaries}
                   dailyWorks={dailyWorks}
                   adminAttendances={adminAttendances}
+                  attendances={attendances}
                   onUpdateSalary={handleUpdateSalary}
                 />
               )}

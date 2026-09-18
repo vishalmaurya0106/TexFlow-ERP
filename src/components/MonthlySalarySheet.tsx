@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { Worker, Salary, DailyWork, AdminAttendance, PayrollStatus, Company } from '../types';
+import { Worker, Salary, DailyWork, AdminAttendance, PayrollStatus, Company, Attendance } from '../types';
 import { formatCurrency, naturalSortWorkers } from '../utils';
 import { FileText, Calendar, Check, Landmark, ArrowUpRight, 
   Settings, Percent, CreditCard, CheckCircle2, AlertCircle,
@@ -12,6 +12,7 @@ import { FileText, Calendar, Check, Landmark, ArrowUpRight,
 } from 'lucide-react';
 import SalarySlipPDF from './SalarySlipPDF';
 import { DateInput } from './DateInput';
+import AttendanceReportDivision from './AttendanceReportDivision';
 
 interface MonthlySalarySheetProps {
   workers: Worker[];
@@ -19,6 +20,7 @@ interface MonthlySalarySheetProps {
   salaries: Salary[];
   dailyWorks: DailyWork[];
   adminAttendances: AdminAttendance[];
+  attendances?: Attendance[];
   onUpdateSalary: (salary: Salary) => void;
 }
 
@@ -28,6 +30,7 @@ export default function MonthlySalarySheet({
   salaries,
   dailyWorks,
   adminAttendances,
+  attendances = [],
   onUpdateSalary
 }: MonthlySalarySheetProps) {
   
@@ -509,6 +512,17 @@ export default function MonthlySalarySheet({
           </button>
         </div>
       </div>
+
+      {/* Attendance Report Division (Present / Absent Report with Date Range, Dropdown & PDF/XL Export) */}
+      <AttendanceReportDivision
+        workers={workers}
+        dailyWorks={dailyWorks}
+        adminAttendances={adminAttendances}
+        attendances={attendances}
+        selectedCompanyFilter={selectedCompanyFilter}
+        defaultStartDate={exportStartDate}
+        defaultEndDate={exportEndDate}
+      />
 
       {/* Summary Metrics Bar */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
