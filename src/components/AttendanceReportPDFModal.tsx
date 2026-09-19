@@ -43,39 +43,84 @@ export default function AttendanceReportPDFModal({
   const totalAbsent = data.reduce((sum, item) => sum + item.absentDays, 0);
 
   const handlePrint = () => {
+    const printElement = document.getElementById('print-attendance-area');
+    if (!printElement) {
+      window.print();
+      return;
+    }
+
+    // Clean up any previously leftover container
+    const oldContainer = document.getElementById('texflow-print-attendance-portal');
+    if (oldContainer) oldContainer.remove();
+    const oldStyle = document.getElementById('print-attendance-report-style');
+    if (oldStyle) oldStyle.remove();
+
+    // Create a dedicated print container attached directly to document.body (outside #root)
+    const printContainer = document.createElement('div');
+    printContainer.id = 'texflow-print-attendance-portal';
+    printContainer.innerHTML = printElement.innerHTML;
+    document.body.appendChild(printContainer);
+
     const style = document.createElement('style');
     style.id = 'print-attendance-report-style';
     style.innerHTML = `
-      @media print {
-        body {
-          background-color: #ffffff !important;
-          color: #000000 !important;
-        }
-        #root, .no-print {
+      @media screen {
+        #texflow-print-attendance-portal {
           display: none !important;
         }
-        #print-attendance-area {
-          display: block !important;
-          position: absolute;
-          left: 0;
-          top: 0;
-          width: 100%;
-          margin: 0;
-          padding: 16px;
+      }
+      @media print {
+        @page {
+          size: A4 portrait;
+          margin: 10mm;
         }
-        table {
+        html, body {
+          background-color: #ffffff !important;
+          color: #000000 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        /* Hide all body direct children except the dedicated print portal */
+        body > *:not(#texflow-print-attendance-portal) {
+          display: none !important;
+        }
+        #texflow-print-attendance-portal {
+          display: block !important;
+          position: static !important;
+          width: 100% !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          background: #ffffff !important;
+          color: #000000 !important;
+          box-sizing: border-box !important;
+        }
+        #texflow-print-attendance-portal table {
           width: 100% !important;
           border-collapse: collapse !important;
+          page-break-inside: auto !important;
         }
-        th, td {
-          border: 1px solid #cbd5e1 !important;
+        #texflow-print-attendance-portal thead {
+          display: table-header-group !important;
+        }
+        #texflow-print-attendance-portal tfoot {
+          display: table-footer-group !important;
+        }
+        #texflow-print-attendance-portal tr {
+          page-break-inside: avoid !important;
+        }
+        #texflow-print-attendance-portal th, 
+        #texflow-print-attendance-portal td {
+          border: 1px solid #94a3b8 !important;
           padding: 6px 10px !important;
           font-size: 11px !important;
+          color: #0f172a !important;
         }
-        th {
+        #texflow-print-attendance-portal th {
           background-color: #f1f5f9 !important;
           font-weight: bold !important;
-          color: #0f172a !important;
+          text-transform: uppercase !important;
         }
       }
     `;
@@ -83,10 +128,15 @@ export default function AttendanceReportPDFModal({
 
     window.print();
 
-    setTimeout(() => {
-      const existing = document.getElementById('print-attendance-report-style');
-      if (existing) existing.remove();
-    }, 500);
+    const cleanup = () => {
+      const el = document.getElementById('texflow-print-attendance-portal');
+      if (el) el.remove();
+      const st = document.getElementById('print-attendance-report-style');
+      if (st) st.remove();
+    };
+
+    window.addEventListener('afterprint', cleanup, { once: true });
+    setTimeout(cleanup, 1500);
   };
 
   return (

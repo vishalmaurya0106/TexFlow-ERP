@@ -17,28 +17,69 @@ export default function SalarySlipPDF({ worker, salary, onClose }: SalarySlipPDF
   const payslipId = `SLIP-${salary.month.replace('-', '')}-${worker.workerId}`;
 
   const handlePrint = () => {
-    // Add print styles dynamically
+    const printElement = document.getElementById('print-area-wrapper');
+    if (!printElement) {
+      window.print();
+      return;
+    }
+
+    // Clean up any previously leftover container
+    const oldContainer = document.getElementById('texflow-print-slip-portal');
+    if (oldContainer) oldContainer.remove();
+    const oldStyle = document.getElementById('print-style-patch');
+    if (oldStyle) oldStyle.remove();
+
+    // Create a dedicated print container attached directly to document.body (outside #root)
+    const printContainer = document.createElement('div');
+    printContainer.id = 'texflow-print-slip-portal';
+    printContainer.innerHTML = printElement.innerHTML;
+    document.body.appendChild(printContainer);
+
     const style = document.createElement('style');
     style.id = 'print-style-patch';
     style.innerHTML = `
-      @media print {
-        body {
-          background-color: #ffffff !important;
-          color: #000000 !important;
-        }
-        /* Hide everything */
-        #root, .no-print {
+      @media screen {
+        #texflow-print-slip-portal {
           display: none !important;
         }
-        /* Show print area only */
-        #print-area-wrapper {
+      }
+      @media print {
+        @page {
+          size: A4 portrait;
+          margin: 10mm;
+        }
+        html, body {
+          background-color: #ffffff !important;
+          color: #000000 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        /* Hide all body direct children except the dedicated print portal */
+        body > *:not(#texflow-print-slip-portal) {
+          display: none !important;
+        }
+        #texflow-print-slip-portal {
           display: block !important;
-          position: absolute;
-          left: 0;
-          top: 0;
-          width: 100%;
-          margin: 0;
-          padding: 0;
+          position: static !important;
+          width: 100% !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          background: #ffffff !important;
+          color: #000000 !important;
+          box-sizing: border-box !important;
+        }
+        #texflow-print-slip-portal table {
+          width: 100% !important;
+          border-collapse: collapse !important;
+        }
+        #texflow-print-slip-portal th, 
+        #texflow-print-slip-portal td {
+          border: 1px solid #94a3b8 !important;
+          padding: 6px 10px !important;
+          font-size: 11px !important;
+          color: #0f172a !important;
         }
       }
     `;
@@ -48,12 +89,15 @@ export default function SalarySlipPDF({ worker, salary, onClose }: SalarySlipPDF
     window.print();
     
     // Cleanup
-    setTimeout(() => {
-      const existingStyle = document.getElementById('print-style-patch');
-      if (existingStyle) {
-        existingStyle.remove();
-      }
-    }, 500);
+    const cleanup = () => {
+      const el = document.getElementById('texflow-print-slip-portal');
+      if (el) el.remove();
+      const st = document.getElementById('print-style-patch');
+      if (st) st.remove();
+    };
+
+    window.addEventListener('afterprint', cleanup, { once: true });
+    setTimeout(cleanup, 1500);
   };
 
   // Format month name (e.g. 2026-07 -> July 2026)
