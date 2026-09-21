@@ -21,6 +21,7 @@ interface LoomDailyWorkProps {
   onAddDailyWork: (work: DailyWork) => void;
   onDeleteDailyWork: (workId: string) => void;
   isAdmin?: boolean;
+  isSupervisor1?: boolean;
 }
 
 export default function LoomDailyWork({
@@ -30,7 +31,8 @@ export default function LoomDailyWork({
   dailyWorks,
   onAddDailyWork,
   onDeleteDailyWork,
-  isAdmin = true
+  isAdmin = true,
+  isSupervisor1 = false
 }: LoomDailyWorkProps) {
   
   // Filter active loom operators
@@ -211,7 +213,11 @@ export default function LoomDailyWork({
             </div>
             <div>
               <h2 id="loom-prod-title" className="text-xl font-bold text-slate-900">Loom Worker Production entry</h2>
-              <p className="text-sm text-slate-500 font-medium">Record daily runs and auto-calculate double precision wages</p>
+              <p className="text-sm text-slate-500 font-medium">
+                {isSupervisor1 
+                  ? 'Record daily machine runs and loom assignments' 
+                  : 'Record daily runs and auto-calculate double precision wages'}
+              </p>
             </div>
           </div>
 
@@ -335,11 +341,21 @@ export default function LoomDailyWork({
                     <Landmark className="h-3 w-3" /> A/C: {currentWorker.bankDetails.bankName} (IFSC: {currentWorker.bankDetails.ifscCode})
                   </div>
                 </div>
-                <div className="text-right sm:text-right w-full sm:w-auto border-t sm:border-t-0 pt-2 sm:pt-0">
-                  <span className="text-xs font-bold text-slate-400 block tracking-wider uppercase">STANDARD RATE</span>
-                  <span className="font-mono font-bold text-indigo-600 text-lg">{formatCurrency(currentWorker.perMachineRate)}</span>
-                  <span className="text-[10px] text-slate-400 block font-semibold">per machine run</span>
-                </div>
+                {!isSupervisor1 ? (
+                  <div className="text-right sm:text-right w-full sm:w-auto border-t sm:border-t-0 pt-2 sm:pt-0">
+                    <span className="text-xs font-bold text-slate-400 block tracking-wider uppercase">STANDARD RATE</span>
+                    <span className="font-mono font-bold text-indigo-600 text-lg">{formatCurrency(currentWorker.perMachineRate)}</span>
+                    <span className="text-[10px] text-slate-400 block font-semibold">per machine run</span>
+                  </div>
+                ) : (
+                  <div className="text-right sm:text-right w-full sm:w-auto border-t sm:border-t-0 pt-2 sm:pt-0">
+                    <span className="text-xs font-bold text-slate-400 block tracking-wider uppercase">COMPANY</span>
+                    <span className="font-bold text-indigo-700 text-sm block">
+                      {currentWorker.companyName || 'TexFlow Textiles'}
+                    </span>
+                    <span className="text-[10px] text-slate-400 block font-semibold">Loom Department</span>
+                  </div>
+                )}
               </div>
             )}
 
@@ -408,13 +424,28 @@ export default function LoomDailyWork({
             {/* Live Calculation Board & Submit Button */}
             <div className="bg-slate-900 text-white rounded-2xl p-5 flex flex-col sm:flex-row justify-between items-center gap-4">
               <div>
-                <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest">WAGE AUTO-CALCULATION</p>
-                <div className="font-mono text-sm mt-1.5 text-slate-300">
-                  {selectedMachines.length} machines × {formatCurrency(currentRate)}
-                </div>
-                <div className="text-2xl font-mono font-bold text-white mt-1">
-                  Total Earned: {formatCurrency(liveWage)}
-                </div>
+                <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest">
+                  {isSupervisor1 ? 'PRODUCTION RUN SUMMARY' : 'WAGE AUTO-CALCULATION'}
+                </p>
+                {isSupervisor1 ? (
+                  <div className="mt-1.5 space-y-0.5">
+                    <div className="font-mono text-xl font-bold text-white">
+                      {selectedMachines.length} {selectedMachines.length === 1 ? 'Machine Assigned' : 'Machines Assigned'}
+                    </div>
+                    <p className="text-xs text-slate-400 font-semibold">
+                      Shift: {selectedShift === 'Day' ? '☀️ Day Shift' : '🌙 Night Shift'} • {formatDate(selectedDate)}
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="font-mono text-sm mt-1.5 text-slate-300">
+                      {selectedMachines.length} machines × {formatCurrency(currentRate)}
+                    </div>
+                    <div className="text-2xl font-mono font-bold text-white mt-1">
+                      Total Earned: {formatCurrency(liveWage)}
+                    </div>
+                  </>
+                )}
               </div>
               <button
                 type="submit"
@@ -579,9 +610,11 @@ export default function LoomDailyWork({
                               </div>
                             </div>
                             <div className="text-right flex items-center gap-1.5">
-                              <div className="font-mono font-bold text-slate-900 text-xs mt-0.5">
-                                {formatCurrency(work.calculatedWage)}
-                              </div>
+                              {!isSupervisor1 && (
+                                <div className="font-mono font-bold text-slate-900 text-xs mt-0.5">
+                                  {formatCurrency(work.calculatedWage)}
+                                </div>
+                              )}
                               {isAdmin && (
                                 <button
                                   title="Delete Log Entry"

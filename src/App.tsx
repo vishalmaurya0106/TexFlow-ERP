@@ -927,6 +927,7 @@ export default function App() {
               onAddDailyWork={handleAddDailyWork}
               onDeleteDailyWork={handleDeleteDailyWork}
               isAdmin={false}
+              isSupervisor1={true}
             />
           ) : isSupervisor2 ? (
             /* SUPERVISOR 2 STRICT VIEW: OTHER ATTENDANCE ONLY */
@@ -936,6 +937,7 @@ export default function App() {
               onAddAdminAttendance={handleAddAdminAttendance}
               onDeleteAdminAttendance={handleDeleteAdminAttendance}
               isAdmin={false}
+              isSupervisor2={true}
             />
           ) : (
             /* ADMIN AND GENERAL USERS VIEW */
@@ -972,6 +974,7 @@ export default function App() {
                   onAddDailyWork={handleAddDailyWork}
                   onDeleteDailyWork={handleDeleteDailyWork}
                   isAdmin={isAdmin}
+                  isSupervisor1={isSupervisor1}
                 />
               )}
 
@@ -992,6 +995,7 @@ export default function App() {
                   onAddAdminAttendance={handleAddAdminAttendance}
                   onDeleteAdminAttendance={handleDeleteAdminAttendance}
                   isAdmin={isAdmin}
+                  isSupervisor2={isSupervisor2}
                 />
               )}
 

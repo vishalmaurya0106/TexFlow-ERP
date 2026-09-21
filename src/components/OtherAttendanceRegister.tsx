@@ -19,6 +19,7 @@ interface OtherAttendanceRegisterProps {
   onAddAdminAttendance: (attendance: AdminAttendance) => void;
   onDeleteAdminAttendance: (id: string) => void;
   isAdmin?: boolean;
+  isSupervisor2?: boolean;
 }
 
 export default function OtherAttendanceRegister({
@@ -26,7 +27,8 @@ export default function OtherAttendanceRegister({
   adminAttendances,
   onAddAdminAttendance,
   onDeleteAdminAttendance,
-  isAdmin = true
+  isAdmin = true,
+  isSupervisor2 = false
 }: OtherAttendanceRegisterProps) {
   
   // Filter active Others Staff
@@ -163,7 +165,11 @@ export default function OtherAttendanceRegister({
               </div>
               <div>
                 <h2 id="other-att-title" className="text-xl font-bold text-slate-900">Other Staff Attendance</h2>
-                <p className="text-sm text-slate-500 font-medium">Record daily attendance and wages for maintenance & general staff</p>
+                <p className="text-sm text-slate-500 font-medium">
+                  {isSupervisor2 
+                    ? 'Record daily attendance for maintenance & general staff' 
+                    : 'Record daily attendance and wages for maintenance & general staff'}
+                </p>
               </div>
             </div>
 
@@ -226,11 +232,19 @@ export default function OtherAttendanceRegister({
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-slate-500 font-medium flex items-center gap-3">
-                        <span>Std Daily Salary: <strong className="font-mono text-slate-800">{formatCurrency(staff.perMachineRate)}</strong></span>
-                        <span>•</span>
-                        <span>Today Wage: <strong className="font-mono text-amber-700 font-bold">{formatCurrency(stagedWage)}</strong></span>
-                      </div>
+                      {!isSupervisor2 ? (
+                        <div className="text-xs text-slate-500 font-medium flex items-center gap-3">
+                          <span>Std Daily Salary: <strong className="font-mono text-slate-800">{formatCurrency(staff.perMachineRate)}</strong></span>
+                          <span>•</span>
+                          <span>Today Wage: <strong className="font-mono text-amber-700 font-bold">{formatCurrency(stagedWage)}</strong></span>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-slate-400 font-medium flex items-center gap-2">
+                          <span>{staff.companyName || 'TexFlow Textiles'}</span>
+                          <span>•</span>
+                          <span>{staff.employeeType}</span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Attendance Status Controls */}
@@ -427,7 +441,7 @@ export default function OtherAttendanceRegister({
                                   ? 'bg-amber-50 text-amber-700 border border-amber-200'
                                   : 'bg-rose-50 text-rose-700 border border-rose-200'
                               }`}>
-                                {log.status} ({formatCurrency(log.calculatedWage)})
+                                {isSupervisor2 ? log.status : `${log.status} (${formatCurrency(log.calculatedWage)})`}
                               </span>
 
                               {isAdmin && (
