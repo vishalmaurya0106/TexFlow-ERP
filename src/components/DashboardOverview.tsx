@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import { Worker, Machine, DailyWork, AdminAttendance, Salary } from '../types';
-import { formatCurrency, formatDate } from '../utils';
+import { formatCurrency, formatDate, formatMachineNumber } from '../utils';
 import { DateInput } from './DateInput';
 import { 
   Cpu, Users, TrendingUp, IndianRupee, Clock, 
@@ -314,7 +314,7 @@ export default function DashboardOverview({
                   {isActive && (
                     <span className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping"></span>
                   )}
-                  <span>{mac.machineId.split(' ')[1]}</span>
+                  <span>{formatMachineNumber(mac.machineId) || mac.machineId}</span>
                 </div>
               );
             })}

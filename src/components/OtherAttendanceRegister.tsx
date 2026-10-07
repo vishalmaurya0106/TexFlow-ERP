@@ -27,7 +27,7 @@ export default function OtherAttendanceRegister({
   adminAttendances,
   onAddAdminAttendance,
   onDeleteAdminAttendance,
-  isAdmin = true,
+  isAdmin = false,
   isSupervisor2 = false
 }: OtherAttendanceRegisterProps) {
   
@@ -444,7 +444,7 @@ export default function OtherAttendanceRegister({
                                 {isSupervisor2 ? log.status : `${log.status} (${formatCurrency(log.calculatedWage)})`}
                               </span>
 
-                              {(isAdmin || isSupervisor2) && (
+                              {isAdmin && (
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -479,6 +479,10 @@ export default function OtherAttendanceRegister({
         confirmLabel="Delete Record"
         cancelLabel="Cancel"
         onConfirm={() => {
+          if (!isAdmin) {
+            setIsConfirmDeleteOpen(false);
+            return;
+          }
           if (deleteAttendanceId) {
             onDeleteAdminAttendance(deleteAttendanceId);
             setDeleteAttendanceId('');

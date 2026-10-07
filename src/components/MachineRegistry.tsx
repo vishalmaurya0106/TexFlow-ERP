@@ -25,7 +25,7 @@ export default function MachineRegistry({
   onAddMachine,
   onUpdateMachine,
   onDeleteMachine,
-  isAdmin = true
+  isAdmin = false
 }: MachineRegistryProps) {
   const activeCount = machines.filter(m => m.isActive).length;
 
@@ -110,6 +110,10 @@ export default function MachineRegistry({
   };
 
   const handleDeleteConfirm = () => {
+    if (!isAdmin) {
+      setIsConfirmDeleteOpen(false);
+      return;
+    }
     onDeleteMachine(deleteMachineId);
     setIsConfirmDeleteOpen(false);
   };

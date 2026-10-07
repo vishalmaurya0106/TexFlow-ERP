@@ -26,7 +26,7 @@ export default function AttendanceRegister({
   attendances,
   onAddAttendance,
   onDeleteAttendance,
-  isAdmin = true
+  isAdmin = false
 }: AttendanceRegisterProps) {
   
   // Filter active loom workers
@@ -532,6 +532,10 @@ export default function AttendanceRegister({
           title="Delete Shift Record"
           message={deleteAttendanceMessage}
           onConfirm={() => {
+            if (!isAdmin) {
+              setIsConfirmDeleteOpen(false);
+              return;
+            }
             onDeleteAttendance(deleteAttendanceId);
             setIsConfirmDeleteOpen(false);
           }}

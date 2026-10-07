@@ -26,7 +26,7 @@ export default function AdminAttendanceRegister({
   adminAttendances,
   onAddAdminAttendance,
   onDeleteAdminAttendance,
-  isAdmin = true
+  isAdmin = false
 }: AdminAttendanceRegisterProps) {
   
   // Filter active Admin Staff
@@ -503,6 +503,10 @@ export default function AdminAttendanceRegister({
           title="Delete Attendance Record"
           message={deleteAdminAttendanceMessage}
           onConfirm={() => {
+            if (!isAdmin) {
+              setIsConfirmDeleteOpen(false);
+              return;
+            }
             onDeleteAdminAttendance(deleteAdminAttendanceId);
             setIsConfirmDeleteOpen(false);
           }}

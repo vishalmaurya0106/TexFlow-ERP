@@ -33,7 +33,7 @@ export default function WorkersDirectory({
   onUpdateWorker, 
   onDeleteWorker,
   onBatchImportWorkers,
-  isAdmin = true
+  isAdmin = false
 }: WorkersDirectoryProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | EmployeeType>('all');
@@ -1044,6 +1044,10 @@ export default function WorkersDirectory({
           title="Delete Employee"
           message={`Are you absolutely sure you want to delete ${deleteWorkerName} (ID: ${deleteWorkerId})? This will also remove their associated logs.`}
           onConfirm={() => {
+            if (!isAdmin) {
+              setIsConfirmDeleteOpen(false);
+              return;
+            }
             onDeleteWorker(deleteWorkerId);
             setIsConfirmDeleteOpen(false);
           }}

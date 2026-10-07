@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Worker, Machine, DailyWork, Company } from '../types';
-import { formatCurrency, formatDate, naturalSortWorkers } from '../utils';
+import { formatCurrency, formatDate, naturalSortWorkers, formatMachineNumber } from '../utils';
 import ConfirmModal from './ConfirmModal';
 import { DateInput } from './DateInput';
 import { 
@@ -31,7 +31,7 @@ export default function LoomDailyWork({
   dailyWorks,
   onAddDailyWork,
   onDeleteDailyWork,
-  isAdmin = true,
+  isAdmin = false,
   isSupervisor1 = false
 }: LoomDailyWorkProps) {
   
@@ -408,7 +408,7 @@ export default function LoomDailyWork({
                         }`}
                       >
                         <span className="text-[9px] uppercase tracking-wider block opacity-70">Loom</span>
-                        <span className="text-xs font-black mt-0.5">{machine.machineId.split(' ')[1] || machine.machineId}</span>
+                        <span className="text-xs font-black mt-0.5">{formatMachineNumber(machine.machineId) || machine.machineId}</span>
                         <span className={`text-[8px] font-sans font-bold truncate max-w-full px-1 mt-0.5 rounded ${
                           isSelected ? 'text-indigo-200' : 'text-slate-400'
                         }`}>
@@ -594,7 +594,15 @@ export default function LoomDailyWork({
                                 {work.workerId} - {workerObj?.name || 'Unknown Worker'}
                               </p>
                               <p className="text-[10px] text-slate-500 font-medium">
-                                Machines: {work.selectedMachines.map(m => m.split(' ')[1]).join(', ')}
+                                Machines:{' '}
+                                <span className="font-semibold text-slate-700">
+                                  {Array.isArray(work.selectedMachines) && work.selectedMachines.length > 0
+                                    ? work.selectedMachines
+                                        .map(m => formatMachineNumber(m))
+                                        .filter(Boolean)
+                                        .join(', ') || (work.machineCount > 0 ? `${work.machineCount} Runs` : 'None')
+                                    : (work.machineCount > 0 ? `${work.machineCount} Runs` : 'None')}
+                                </span>
                               </p>
                               <div className="flex flex-wrap gap-1 items-center mt-1">
                                 <span className="inline-block text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-full px-2 py-0.5">
@@ -615,7 +623,7 @@ export default function LoomDailyWork({
                                   {formatCurrency(work.calculatedWage)}
                                 </div>
                               )}
-                              {(isAdmin || isSupervisor1) && (
+                              {isAdmin && (
                                 <button
                                   title="Delete Log Entry"
                                   onClick={() => {
@@ -647,6 +655,10 @@ export default function LoomDailyWork({
           title="Delete Production Log"
           message={deleteWorkMessage}
           onConfirm={() => {
+            if (!isAdmin) {
+              setIsConfirmDeleteOpen(false);
+              return;
+            }
             onDeleteDailyWork(deleteWorkId);
             setIsConfirmDeleteOpen(false);
           }}

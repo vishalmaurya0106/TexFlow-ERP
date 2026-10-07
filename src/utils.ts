@@ -51,6 +51,23 @@ export function formatShortDate(dateStr: string): string {
   return dateStr;
 }
 
+// Helper to extract clean machine number/identifier (e.g. "Machine 23" -> "23", "23" -> "23", "Machine 01" -> "01")
+export function formatMachineNumber(machineStr: string | number): string {
+  if (machineStr === null || machineStr === undefined) return '';
+  const str = String(machineStr).trim();
+  if (!str) return '';
+  
+  // If format is like "Machine 23", "Machine 01"
+  const parts = str.split(/\s+/);
+  if (parts.length > 1 && parts[0].toLowerCase() === 'machine') {
+    return parts.slice(1).join(' ');
+  }
+  
+  // If format is like "Machine-23", "M-23", "Loom 23"
+  const clean = str.replace(/^(?:machine|loom|m)[\s\-_]*/i, '').trim();
+  return clean || str;
+}
+
 // Generate the 30 Loom Machines
 export const DEFAULT_MACHINES: Machine[] = Array.from({ length: 30 }, (_, i) => {
   const idNum = i + 1;
