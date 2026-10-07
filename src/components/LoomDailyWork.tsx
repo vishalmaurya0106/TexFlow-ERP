@@ -615,7 +615,7 @@ export default function LoomDailyWork({
                                   {formatCurrency(work.calculatedWage)}
                                 </div>
                               )}
-                              {isAdmin && (
+                              {(isAdmin || isSupervisor1) && (
                                 <button
                                   title="Delete Log Entry"
                                   onClick={() => {

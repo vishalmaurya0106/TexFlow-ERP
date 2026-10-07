@@ -23,6 +23,7 @@ import ConfirmModal from './components/ConfirmModal';
 import LoginModal from './components/LoginModal';
 import ClearDataModal from './components/ClearDataModal';
 import SettingsPanel from './components/SettingsPanel';
+import LoomReportsRegister from './components/LoomReportsRegister';
 
 import { 
   Cpu, Users, Cpu as LoomIcon, Clock, Building, FileText, 
@@ -35,6 +36,8 @@ import {
   testFirebaseConnection, 
   fetchFirebaseWorkers, fetchFirebaseMachines, fetchFirebaseDailyWorks,
   fetchFirebaseAdminAttendances, fetchFirebaseAttendances, fetchFirebaseSalaries, fetchFirebaseCompanies,
+  subscribeFirebaseWorkers, subscribeFirebaseMachines, subscribeFirebaseDailyWorks,
+  subscribeFirebaseAdminAttendances, subscribeFirebaseAttendances, subscribeFirebaseSalaries, subscribeFirebaseCompanies,
   createWorker, updateWorker, deleteWorker, batchSaveWorkers,
   createMachine, updateMachine, deleteMachine,
   createDailyWork, updateDailyWork, deleteDailyWork,
@@ -169,6 +172,8 @@ export default function App() {
 
   // --- Load Data on Boot (From Firebase Firestore + Zero Data Loss Local Merge) ---
   useEffect(() => {
+    let unsubs: Array<() => void> = [];
+
     async function initData() {
       setCloudStatus('connecting');
       setCloudMsg('Connecting to Firebase Firestore...');
@@ -283,6 +288,52 @@ export default function App() {
             reconcileSalariesToFirebase(mergedSalaries).catch(() => {})
           ]);
         }
+
+        // ==========================================
+        // REAL-TIME FIRESTORE SUBSCRIPTIONS (LIVE MULTI-VIEW & MOBILE SYNC)
+        // ==========================================
+        // Updates state immediately without needing page refresh across Admin, Supervisors, and Mobile views
+        const unsubComp = subscribeFirebaseCompanies((liveComp) => {
+          if (liveComp && liveComp.length > 0) {
+            setCompanies(liveComp);
+            try { localStorage.setItem('texflow_companies', JSON.stringify(liveComp)); } catch {}
+          }
+        });
+
+        const unsubW = subscribeFirebaseWorkers((liveWorkers) => {
+          setWorkers(liveWorkers);
+          try { localStorage.setItem('texflow_workers', JSON.stringify(liveWorkers)); } catch {}
+        });
+
+        const unsubM = subscribeFirebaseMachines((liveMachines) => {
+          if (liveMachines && liveMachines.length > 0) {
+            setMachines(liveMachines);
+            try { localStorage.setItem('texflow_machines', JSON.stringify(liveMachines)); } catch {}
+          }
+        });
+
+        const unsubDW = subscribeFirebaseDailyWorks((liveWorks) => {
+          setDailyWorks(liveWorks);
+          try { localStorage.setItem('texflow_dailyWorks', JSON.stringify(liveWorks)); } catch {}
+        });
+
+        const unsubAA = subscribeFirebaseAdminAttendances((liveAdminAtt) => {
+          setAdminAttendances(liveAdminAtt);
+          try { localStorage.setItem('texflow_adminAttendances', JSON.stringify(liveAdminAtt)); } catch {}
+        });
+
+        const unsubA = subscribeFirebaseAttendances((liveAtt) => {
+          setAttendances(liveAtt);
+          try { localStorage.setItem('texflow_attendances', JSON.stringify(liveAtt)); } catch {}
+        });
+
+        const unsubS = subscribeFirebaseSalaries((liveSal) => {
+          setSalaries(liveSal);
+          try { localStorage.setItem('texflow_salaries', JSON.stringify(liveSal)); } catch {}
+        });
+
+        unsubs.push(unsubComp, unsubW, unsubM, unsubDW, unsubAA, unsubA, unsubS);
+
       } catch (err: any) {
         setCloudStatus('error');
         setCloudMsg(`Firebase sync notice: ${err?.message || err}. Running on local storage.`);
@@ -290,6 +341,29 @@ export default function App() {
     }
 
     initData();
+
+    // Cross-tab / Window instantaneous sync listener
+    const handleStorageChange = (e: StorageEvent) => {
+      if (!e.key || !e.newValue) return;
+      try {
+        if (e.key === 'texflow_workers') setWorkers(JSON.parse(e.newValue));
+        if (e.key === 'texflow_dailyWorks') setDailyWorks(JSON.parse(e.newValue));
+        if (e.key === 'texflow_adminAttendances') setAdminAttendances(JSON.parse(e.newValue));
+        if (e.key === 'texflow_attendances') setAttendances(JSON.parse(e.newValue));
+        if (e.key === 'texflow_machines') setMachines(JSON.parse(e.newValue));
+        if (e.key === 'texflow_companies') setCompanies(JSON.parse(e.newValue));
+        if (e.key === 'texflow_salaries') setSalaries(JSON.parse(e.newValue));
+      } catch {}
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      unsubs.forEach(fn => {
+        try { fn(); } catch {}
+      });
+      window.removeEventListener('storage', handleStorageChange);
+    };
   }, []);
 
   const handleManualSyncAll = async () => {
@@ -846,7 +920,8 @@ export default function App() {
             { id: 'admin-att', label: 'Admin attendance', icon: <Building className="h-4.5 w-4.5" /> },
             { id: 'other-att', label: 'Other Attendance', icon: <Users className="h-4.5 w-4.5 text-amber-400" /> },
             { id: 'salary', label: 'Monthly Salary ledger', icon: <FileText className="h-4.5 w-4.5" /> },
-            { id: 'machines', label: 'Loom machines', icon: <Cpu className="h-4.5 w-4.5 text-indigo-400" /> }
+            { id: 'machines', label: 'Loom machines', icon: <Cpu className="h-4.5 w-4.5 text-indigo-400" /> },
+            { id: 'loom-reports', label: 'Reports', icon: <FileText className="h-4.5 w-4.5 text-emerald-400" /> }
           ]
             .filter((tab) => {
               if (isSupervisor1) return tab.id === 'production';
@@ -1020,6 +1095,17 @@ export default function App() {
                   onUpdateMachine={handleUpdateMachine}
                   onDeleteMachine={handleDeleteMachine}
                   isAdmin={isAdmin}
+                />
+              )}
+
+              {activeTab === 'loom-reports' && (
+                <LoomReportsRegister
+                  workers={workers}
+                  dailyWorks={dailyWorks}
+                  adminAttendances={adminAttendances}
+                  attendances={attendances}
+                  machines={machines}
+                  companies={companies}
                 />
               )}
 

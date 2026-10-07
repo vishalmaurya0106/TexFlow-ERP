@@ -11,7 +11,9 @@ import {
   getDocs, 
   setDoc, 
   deleteDoc, 
-  writeBatch
+  writeBatch,
+  onSnapshot,
+  Unsubscribe
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { Worker, Machine, DailyWork, AdminAttendance, Attendance, Salary, Company } from '../types';
@@ -479,3 +481,152 @@ export async function reconcileSalariesToFirebase(salaries: Salary[]): Promise<v
     await createSalary(s);
   }
 }
+
+// ==========================================
+// REAL-TIME FIRESTORE SUBSCRIPTIONS (LIVE SYNC)
+// ==========================================
+
+export function subscribeFirebaseCompanies(onData: (companies: Company[]) => void): Unsubscribe {
+  const collRef = collection(db, 'companies');
+  return onSnapshot(collRef, (snapshot) => {
+    const list = snapshot.docs.map(d => {
+      const data = d.data();
+      return {
+        companyId: data.companyId || d.id,
+        name: data.name || ''
+      };
+    });
+    onData(list);
+  }, (err) => {
+    console.warn('Real-time companies sync warning:', err?.message || err);
+  });
+}
+
+export function subscribeFirebaseWorkers(onData: (workers: Worker[]) => void): Unsubscribe {
+  const collRef = collection(db, 'workers');
+  return onSnapshot(collRef, (snapshot) => {
+    const list = snapshot.docs.map(d => {
+      const data = d.data();
+      return {
+        workerId: data.workerId || d.id,
+        name: data.name || '',
+        mobileNumber: data.mobileNumber || '',
+        address: data.address || '',
+        joiningDate: data.joiningDate || '',
+        bankDetails: data.bankDetails || { bankName: '', accountNumber: '', ifscCode: '', beneficiaryName: '' },
+        aadhaarNumber: data.aadhaarNumber || '',
+        isActive: data.isActive ?? true,
+        perMachineRate: Number(data.perMachineRate ?? 0),
+        monthlySalary: data.monthlySalary !== undefined ? Number(data.monthlySalary) : undefined,
+        monthlyDays: data.monthlyDays !== undefined ? Number(data.monthlyDays) : undefined,
+        employeeType: data.employeeType || 'Worker',
+        companyName: data.companyName || ''
+      };
+    });
+    onData(list);
+  }, (err) => {
+    console.warn('Real-time workers sync warning:', err?.message || err);
+  });
+}
+
+export function subscribeFirebaseMachines(onData: (machines: Machine[]) => void): Unsubscribe {
+  const collRef = collection(db, 'machines');
+  return onSnapshot(collRef, (snapshot) => {
+    const list = snapshot.docs.map(d => {
+      const data = d.data();
+      return {
+        machineId: data.machineId || d.id,
+        isActive: data.isActive ?? true,
+        companyName: data.companyName || ''
+      };
+    });
+    onData(list);
+  }, (err) => {
+    console.warn('Real-time machines sync warning:', err?.message || err);
+  });
+}
+
+export function subscribeFirebaseDailyWorks(onData: (works: DailyWork[]) => void): Unsubscribe {
+  const collRef = collection(db, 'daily_works');
+  return onSnapshot(collRef, (snapshot) => {
+    const list = snapshot.docs.map(d => {
+      const data = d.data();
+      return {
+        workId: data.workId || d.id,
+        workerId: data.workerId || '',
+        date: data.date || '',
+        selectedMachines: data.selectedMachines || [],
+        machineCount: Number(data.machineCount ?? 0),
+        perMachineRate: Number(data.perMachineRate ?? 0),
+        calculatedWage: Number(data.calculatedWage ?? 0),
+        shift: data.shift || 'Day'
+      };
+    });
+    onData(list);
+  }, (err) => {
+    console.warn('Real-time daily works sync warning:', err?.message || err);
+  });
+}
+
+export function subscribeFirebaseAdminAttendances(onData: (attendances: AdminAttendance[]) => void): Unsubscribe {
+  const collRef = collection(db, 'admin_attendances');
+  return onSnapshot(collRef, (snapshot) => {
+    const list = snapshot.docs.map(d => {
+      const data = d.data();
+      return {
+        adminAttendanceId: data.adminAttendanceId || d.id,
+        workerId: data.workerId || '',
+        date: data.date || '',
+        status: data.status || 'Present',
+        calculatedWage: Number(data.calculatedWage ?? 0)
+      };
+    });
+    onData(list);
+  }, (err) => {
+    console.warn('Real-time admin attendances sync warning:', err?.message || err);
+  });
+}
+
+export function subscribeFirebaseAttendances(onData: (attendances: Attendance[]) => void): Unsubscribe {
+  const collRef = collection(db, 'attendances');
+  return onSnapshot(collRef, (snapshot) => {
+    const list = snapshot.docs.map(d => {
+      const data = d.data();
+      return {
+        attendanceId: data.attendanceId || d.id,
+        workerId: data.workerId || '',
+        date: data.date || '',
+        status: data.status || 'Present',
+        inTime: data.inTime || '',
+        outTime: data.outTime || ''
+      };
+    });
+    onData(list);
+  }, (err) => {
+    console.warn('Real-time attendances sync warning:', err?.message || err);
+  });
+}
+
+export function subscribeFirebaseSalaries(onData: (salaries: Salary[]) => void): Unsubscribe {
+  const collRef = collection(db, 'salaries');
+  return onSnapshot(collRef, (snapshot) => {
+    const list = snapshot.docs.map(d => {
+      const data = d.data();
+      return {
+        salaryId: data.salaryId || d.id,
+        workerId: data.workerId || '',
+        month: data.month || '',
+        baseSalary: Number(data.baseSalary ?? 0),
+        bonus: Number(data.bonus ?? 0),
+        advance: Number(data.advance ?? 0),
+        deductions: Number(data.deductions ?? 0),
+        netSalary: Number(data.netSalary ?? 0),
+        status: data.status || 'Pending'
+      };
+    });
+    onData(list);
+  }, (err) => {
+    console.warn('Real-time salaries sync warning:', err?.message || err);
+  });
+}
+

@@ -444,7 +444,7 @@ export default function OtherAttendanceRegister({
                                 {isSupervisor2 ? log.status : `${log.status} (${formatCurrency(log.calculatedWage)})`}
                               </span>
 
-                              {isAdmin && (
+                              {(isAdmin || isSupervisor2) && (
                                 <button
                                   type="button"
                                   onClick={() => {
