@@ -15,6 +15,7 @@ export interface LoomReportItem {
   presentDays: number;
   machineCount: number;
   presentMachineValue: number;
+  dailyValues?: Record<string, number>;
   distinctMachines?: string[];
 }
 
@@ -24,7 +25,17 @@ interface LoomReportPDFModalProps {
   startDate: string;
   endDate: string;
   companyName: string;
+  dateList?: string[];
   data: LoomReportItem[];
+}
+
+function formatShortDate(dateStr: string): string {
+  if (!dateStr) return '';
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+    return `${parts[2]}/${parts[1]}`;
+  }
+  return dateStr;
 }
 
 export default function LoomReportPDFModal({
@@ -33,6 +44,7 @@ export default function LoomReportPDFModal({
   startDate,
   endDate,
   companyName,
+  dateList = [],
   data
 }: LoomReportPDFModalProps) {
   if (!isOpen) return null;
@@ -59,6 +71,9 @@ export default function LoomReportPDFModal({
     printContainer.innerHTML = printElement.innerHTML;
     document.body.appendChild(printContainer);
 
+    const printPadding = dateList.length > 20 ? '2px 2px' : dateList.length > 10 ? '3px 3px' : '4px 6px';
+    const printFontSize = dateList.length > 20 ? '7.5px' : dateList.length > 10 ? '8.5px' : '10px';
+
     const style = document.createElement('style');
     style.id = 'print-loom-report-style';
     style.innerHTML = `
@@ -69,8 +84,8 @@ export default function LoomReportPDFModal({
       }
       @media print {
         @page {
-          size: A4 portrait;
-          margin: 10mm;
+          size: A4 landscape;
+          margin: 6mm;
         }
         html, body {
           background-color: #ffffff !important;
@@ -111,8 +126,8 @@ export default function LoomReportPDFModal({
         #texflow-print-loom-portal th, 
         #texflow-print-loom-portal td {
           border: 1px solid #94a3b8 !important;
-          padding: 6px 10px !important;
-          font-size: 11px !important;
+          padding: ${printPadding} !important;
+          font-size: ${printFontSize} !important;
           color: #0f172a !important;
         }
         #texflow-print-loom-portal th {
@@ -139,7 +154,7 @@ export default function LoomReportPDFModal({
 
   return (
     <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex justify-center items-start overflow-y-auto p-4 md:p-8 z-50 no-print animate-fade-in">
-      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-4xl overflow-hidden mt-4">
+      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-6xl overflow-hidden mt-4">
         
         {/* Top Header Bar */}
         <div className="bg-slate-900 px-6 py-4 flex justify-between items-center text-white">
@@ -221,41 +236,54 @@ export default function LoomReportPDFModal({
           <div className="overflow-x-auto">
             <table className="w-full border-collapse border border-slate-200 text-left text-xs">
               <thead>
-                <tr className="bg-slate-100 text-slate-800 font-extrabold uppercase text-[11px]">
-                  <th className="border border-slate-300 px-3 py-2 text-center w-12">SR.</th>
-                  <th className="border border-slate-300 px-3 py-2">CODE NO.</th>
-                  <th className="border border-slate-300 px-3 py-2">EMPLOYEE NAME</th>
-                  <th className="border border-slate-300 px-3 py-2">DEPARTMENT</th>
-                  <th className="border border-slate-300 px-3 py-2 text-center bg-indigo-50 text-indigo-900 w-36">
+                <tr className="bg-slate-100 text-slate-800 font-extrabold uppercase text-[10px]">
+                  <th className="border border-slate-300 px-2 py-1.5 text-center w-8">SR.</th>
+                  <th className="border border-slate-300 px-2 py-1.5 w-16">CODE NO.</th>
+                  <th className="border border-slate-300 px-2 py-1.5 min-w-[120px]">EMPLOYEE NAME</th>
+                  <th className="border border-slate-300 px-2 py-1.5 w-24">DEPARTMENT</th>
+                  <th className="border border-slate-300 px-2 py-1.5 text-center bg-indigo-50 text-indigo-900 w-28 font-black">
                     Present/Machine
                   </th>
+                  {dateList.map(d => (
+                    <th key={d} className="border border-slate-300 px-1 py-1 text-center bg-slate-50 text-slate-700 font-bold min-w-[36px] text-[9px]">
+                      {formatShortDate(d)}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {data.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="border border-slate-300 px-4 py-8 text-center text-slate-400 font-medium">
+                    <td colSpan={5 + dateList.length} className="border border-slate-300 px-4 py-8 text-center text-slate-400 font-medium">
                       No records found for the selected date range.
                     </td>
                   </tr>
                 ) : (
                   data.map((item, idx) => (
                     <tr key={item.workerId} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                      <td className="border border-slate-200 px-3 py-2 text-center font-medium text-slate-500">
+                      <td className="border border-slate-200 px-2 py-1 text-center font-medium text-slate-500">
                         {idx + 1}
                       </td>
-                      <td className="border border-slate-200 px-3 py-2 font-mono font-bold text-slate-900">
+                      <td className="border border-slate-200 px-2 py-1 font-mono font-bold text-slate-900">
                         {item.workerId}
                       </td>
-                      <td className="border border-slate-200 px-3 py-2 font-bold text-slate-800">
+                      <td className="border border-slate-200 px-2 py-1 font-bold text-slate-800 whitespace-nowrap">
                         {item.name}
                       </td>
-                      <td className="border border-slate-200 px-3 py-2 text-slate-600 font-medium">
+                      <td className="border border-slate-200 px-2 py-1 text-slate-600 font-medium whitespace-nowrap">
                         {item.employeeType}
                       </td>
-                      <td className="border border-slate-200 px-3 py-2 text-center font-bold text-indigo-700 bg-indigo-50/30">
+                      <td className="border border-slate-200 px-2 py-1 text-center font-bold text-indigo-700 bg-indigo-50/30">
                         {item.presentMachineValue}
                       </td>
+                      {dateList.map(d => {
+                        const val = item.dailyValues?.[d] || 0;
+                        return (
+                          <td key={d} className="border border-slate-200 px-1 py-1 text-center font-mono text-[10px]">
+                            {val > 0 ? val : '-'}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))
                 )}
@@ -263,12 +291,20 @@ export default function LoomReportPDFModal({
               {data.length > 0 && (
                 <tfoot>
                   <tr className="bg-slate-100 font-extrabold text-slate-900">
-                    <td colSpan={4} className="border border-slate-300 px-3 py-2 text-right uppercase">
+                    <td colSpan={4} className="border border-slate-300 px-2 py-1.5 text-right uppercase text-[10px]">
                       Total:
                     </td>
-                    <td className="border border-slate-300 px-3 py-2 text-center text-indigo-700 font-mono font-bold">
+                    <td className="border border-slate-300 px-2 py-1.5 text-center text-indigo-700 font-mono font-bold">
                       {totalPresentMachine}
                     </td>
+                    {dateList.map(d => {
+                      const dayTotal = data.reduce((sum, item) => sum + (item.dailyValues?.[d] || 0), 0);
+                      return (
+                        <td key={d} className="border border-slate-300 px-1 py-1 text-center font-mono font-bold text-[10px] text-slate-800">
+                          {dayTotal > 0 ? dayTotal : '-'}
+                        </td>
+                      );
+                    })}
                   </tr>
                 </tfoot>
               )}

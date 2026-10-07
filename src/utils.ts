@@ -39,6 +39,18 @@ export function formatDate(dateStr: string): string {
   return dateStr;
 }
 
+// Helper to format date cleanly as DD/MM (short date)
+export function formatShortDate(dateStr: string): string {
+  if (!dateStr) return '';
+  const cleanDateStr = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+  const parts = cleanDateStr.split('-');
+  if (parts.length === 3 && parts[0].length === 4) {
+    const [, month, day] = parts;
+    return `${day.padStart(2, '0')}/${month.padStart(2, '0')}`;
+  }
+  return dateStr;
+}
+
 // Generate the 30 Loom Machines
 export const DEFAULT_MACHINES: Machine[] = Array.from({ length: 30 }, (_, i) => {
   const idNum = i + 1;

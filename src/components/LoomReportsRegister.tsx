@@ -30,7 +30,7 @@ import {
   CheckCircle2,
   FileSpreadsheet
 } from 'lucide-react';
-import { naturalSortWorkers, formatDate } from '../utils';
+import { naturalSortWorkers, formatDate, formatShortDate } from '../utils';
 
 interface LoomReportsRegisterProps {
   workers: Worker[];
@@ -76,6 +76,28 @@ export default function LoomReportsRegister({
   const [isGenerateMenuOpen, setIsGenerateMenuOpen] = useState<boolean>(false);
   const [lastGeneratedAt, setLastGeneratedAt] = useState<string>(() => new Date().toLocaleTimeString());
 
+  // Helper to build list of dates in selected range
+  const dateList = useMemo(() => {
+    if (!startDate || !endDate || startDate > endDate) return [];
+    const dates: string[] = [];
+    const [sy, sm, sd] = startDate.split('-').map(Number);
+    const [ey, em, ed] = endDate.split('-').map(Number);
+    const curr = new Date(sy, sm - 1, sd);
+    const end = new Date(ey, em - 1, ed);
+
+    // Safety guard max 100 days
+    let count = 0;
+    while (curr <= end && count < 100) {
+      const y = curr.getFullYear();
+      const m = String(curr.getMonth() + 1).padStart(2, '0');
+      const d = String(curr.getDate()).padStart(2, '0');
+      dates.push(`${y}-${m}-${d}`);
+      curr.setDate(curr.getDate() + 1);
+      count++;
+    }
+    return dates;
+  }, [startDate, endDate]);
+
   // Calculate Loom Report Data
   const calculatedData: LoomReportItem[] = useMemo(() => {
     if (!startDate || !endDate || startDate > endDate) return [];
@@ -103,66 +125,65 @@ export default function LoomReportsRegister({
       let totalMachineCount = 0;
       const distinctMachineSet = new Set<string>();
       let presentDays = 0;
+      const dailyValues: Record<string, number> = {};
 
       if (worker.employeeType === 'Worker') {
-        // Loom Operator: working on machines from dailyWorks
-        const workerWorks = dailyWorks.filter(dw => 
-          dw.workerId === worker.workerId &&
-          dw.date >= startDate &&
-          dw.date <= endDate
-        );
+        // Map dailyWorks by date for this loom worker
+        const dwByDate = new Map<string, number>();
+        dailyWorks.forEach(dw => {
+          if (dw.workerId === worker.workerId && dw.date >= startDate && dw.date <= endDate) {
+            const count = typeof dw.machineCount === 'number' && dw.machineCount > 0
+              ? dw.machineCount
+              : (Array.isArray(dw.selectedMachines) ? dw.selectedMachines.length : 0);
+            
+            dwByDate.set(dw.date, (dwByDate.get(dw.date) || 0) + count);
 
-        const distinctDatesSet = new Set<string>();
-
-        workerWorks.forEach(dw => {
-          const count = typeof dw.machineCount === 'number' && dw.machineCount > 0
-            ? dw.machineCount
-            : (Array.isArray(dw.selectedMachines) ? dw.selectedMachines.length : 0);
-
-          totalMachineCount += count;
-
-          if (Array.isArray(dw.selectedMachines)) {
-            dw.selectedMachines.forEach(m => distinctMachineSet.add(m));
-          }
-
-          if (count > 0 || dw.calculatedWage > 0) {
-            distinctDatesSet.add(dw.date);
+            if (Array.isArray(dw.selectedMachines)) {
+              dw.selectedMachines.forEach(m => distinctMachineSet.add(m));
+            }
           }
         });
 
-        presentDays = distinctDatesSet.size;
-      } else {
-        // Admin Staff or Other Staff: not working on machines; attendance from adminAttendances & attendances
-        const staffAdminAtt = (adminAttendances || []).filter(aa => 
-          aa.workerId === worker.workerId &&
-          aa.date >= startDate &&
-          aa.date <= endDate
-        );
-
-        staffAdminAtt.forEach(aa => {
-          if (aa.status === 'Present') {
+        // Compute daily values across each day in dateList
+        dateList.forEach(d => {
+          const count = dwByDate.get(d) || 0;
+          dailyValues[d] = count;
+          if (count > 0) {
+            totalMachineCount += count;
             presentDays += 1;
-          } else if (aa.status === 'Half-Day') {
-            presentDays += 0.5;
+          }
+        });
+      } else {
+        // Admin Staff or Other Staff: attendance from adminAttendances & attendances
+        const aaMap = new Map<string, AdminAttendance>();
+        (adminAttendances || []).forEach(aa => {
+          if (aa.workerId === worker.workerId && aa.date >= startDate && aa.date <= endDate) {
+            aaMap.set(aa.date, aa);
           }
         });
 
-        const staffAtt = (attendances || []).filter(a => 
-          a.workerId === worker.workerId &&
-          a.date >= startDate &&
-          a.date <= endDate
-        );
+        const attMap = new Map<string, Attendance>();
+        (attendances || []).forEach(a => {
+          if (a.workerId === worker.workerId && a.date >= startDate && a.date <= endDate) {
+            attMap.set(a.date, a);
+          }
+        });
 
-        staffAtt.forEach(a => {
-          if (a.status === 'Present') {
-            if (!staffAdminAtt.some(aa => aa.date === a.date)) {
-              presentDays += 1;
-            }
-          } else if (a.status === 'Half-Day') {
-            if (!staffAdminAtt.some(aa => aa.date === a.date)) {
-              presentDays += 0.5;
+        dateList.forEach(d => {
+          let dayVal = 0;
+          const aa = aaMap.get(d);
+          if (aa) {
+            if (aa.status === 'Present') dayVal = 1;
+            else if (aa.status === 'Half-Day') dayVal = 0.5;
+          } else {
+            const a = attMap.get(d);
+            if (a) {
+              if (a.status === 'Present') dayVal = 1;
+              else if (a.status === 'Half-Day') dayVal = 0.5;
             }
           }
+          dailyValues[d] = dayVal;
+          presentDays += dayVal;
         });
       }
 
@@ -187,10 +208,11 @@ export default function LoomReportsRegister({
         presentDays,
         machineCount: totalMachineCount,
         presentMachineValue,
+        dailyValues,
         distinctMachines: Array.from(distinctMachineSet)
       };
     });
-  }, [workers, dailyWorks, adminAttendances, attendances, startDate, endDate, selectedCompanyFilter, selectedDepartmentFilter]);
+  }, [workers, dailyWorks, adminAttendances, attendances, startDate, endDate, dateList, selectedCompanyFilter, selectedDepartmentFilter]);
 
   // Filtered rows by search and active work toggle
   const filteredRows = useMemo(() => {
@@ -224,18 +246,28 @@ export default function LoomReportsRegister({
       ? 'Merged Report - All Companies' 
       : selectedCompanyFilter;
 
-    // Headers with merged Present/Machine column
-    const headers = ['SR NO', 'CODE NO', 'NAME', 'DEPARTMENT', 'Present/Machine'];
+    // Headers with merged Present/Machine column and all selected dates in short format
+    const dateHeaders = dateList.map(d => formatShortDate(d));
+    const headers = ['SR NO', 'CODE NO', 'NAME', 'DEPARTMENT', 'Present/Machine', ...dateHeaders];
 
     const rows = filteredRows.map((item, index) => [
       index + 1,
       item.workerId,
       item.name,
       item.employeeType,
-      item.presentMachineValue
+      item.presentMachineValue,
+      ...dateList.map(d => {
+        const val = item.dailyValues?.[d];
+        return typeof val === 'number' && val > 0 ? val : '-';
+      })
     ]);
 
-    const summaryRow = ['', 'TOTAL', `${filteredRows.length} Workers`, '', totalPresentMachine];
+    const dateTotals = dateList.map(d => {
+      const dt = filteredRows.reduce((sum, item) => sum + (item.dailyValues?.[d] || 0), 0);
+      return dt > 0 ? dt : '-';
+    });
+
+    const summaryRow = ['', 'TOTAL', `${filteredRows.length} Workers`, '', totalPresentMachine, ...dateTotals];
 
     const sheetData = [
       ['TEXFLOW TEXTILES - LOOM PRODUCTION & MACHINE REPORT'],
@@ -252,13 +284,15 @@ export default function LoomReportsRegister({
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
 
     // Set column widths
-    ws['!cols'] = [
+    const cols = [
       { wch: 8 },  // SR NO
       { wch: 14 }, // CODE NO
       { wch: 28 }, // NAME
       { wch: 20 }, // DEPARTMENT
-      { wch: 18 }  // Present/Machine
+      { wch: 18 }, // Present/Machine
+      ...dateList.map(() => ({ wch: 8 }))
     ];
+    ws['!cols'] = cols;
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Loom_Report');
@@ -538,23 +572,28 @@ export default function LoomReportsRegister({
 
         {/* Table Container */}
         <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-          <div className="max-h-[500px] overflow-y-auto">
+          <div className="max-h-[550px] overflow-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead className="bg-slate-100 text-slate-700 font-extrabold sticky top-0 uppercase text-[11px] border-b border-slate-200 z-10">
                 <tr>
-                  <th className="px-4 py-3 text-center w-14">SR.</th>
-                  <th className="px-4 py-3 w-28">CODE NO.</th>
-                  <th className="px-4 py-3">EMPLOYEE NAME</th>
-                  <th className="px-4 py-3">DEPARTMENT</th>
-                  <th className="px-4 py-3 text-center bg-indigo-100/60 text-indigo-900 w-36">
+                  <th className="px-3 py-3 text-center w-12 sticky left-0 bg-slate-100 z-20">SR.</th>
+                  <th className="px-3 py-3 w-24 sticky left-12 bg-slate-100 z-20">CODE NO.</th>
+                  <th className="px-3 py-3 min-w-[150px] sticky left-36 bg-slate-100 z-20 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.1)]">EMPLOYEE NAME</th>
+                  <th className="px-3 py-3 min-w-[120px]">DEPARTMENT</th>
+                  <th className="px-3 py-3 text-center bg-indigo-100/80 text-indigo-900 min-w-[120px] font-black border-l border-r border-indigo-200">
                     Present/Machine
                   </th>
+                  {dateList.map(d => (
+                    <th key={d} className="px-2 py-2 text-center bg-slate-100 text-slate-700 font-bold min-w-[46px] text-[10px] border-r border-slate-200 whitespace-nowrap">
+                      {formatShortDate(d)}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-4 py-12 text-center text-slate-400 font-medium">
+                    <td colSpan={5 + dateList.length} className="px-4 py-12 text-center text-slate-400 font-medium">
                       <div className="max-w-xs mx-auto space-y-2">
                         <Cpu className="h-8 w-8 text-slate-300 mx-auto" />
                         <p className="text-sm font-bold text-slate-600">No records found</p>
@@ -573,32 +612,38 @@ export default function LoomReportsRegister({
                       }`}
                     >
                       {/* 1. SR NO */}
-                      <td className="px-4 py-3 text-center font-bold text-slate-400">
+                      <td className={`px-3 py-2.5 text-center font-bold text-slate-400 sticky left-0 z-10 ${
+                        index % 2 === 0 ? 'bg-white' : 'bg-slate-50'
+                      }`}>
                         {index + 1}
                       </td>
 
                       {/* 2. CODE NO */}
-                      <td className="px-4 py-3 font-mono font-bold text-slate-900">
+                      <td className={`px-3 py-2.5 font-mono font-bold text-slate-900 sticky left-12 z-10 ${
+                        index % 2 === 0 ? 'bg-white' : 'bg-slate-50'
+                      }`}>
                         <span className="px-2 py-0.5 bg-slate-100 rounded-md border border-slate-200">
                           {item.workerId}
                         </span>
                       </td>
 
                       {/* 3. NAME */}
-                      <td className="px-4 py-3">
-                        <p className="font-bold text-slate-900">{item.name}</p>
-                        <p className="text-[10px] text-slate-400 font-medium">{item.companyName}</p>
+                      <td className={`px-3 py-2.5 sticky left-36 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.1)] ${
+                        index % 2 === 0 ? 'bg-white' : 'bg-slate-50'
+                      }`}>
+                        <p className="font-bold text-slate-900 whitespace-nowrap">{item.name}</p>
+                        <p className="text-[10px] text-slate-400 font-medium truncate max-w-[150px]">{item.companyName}</p>
                       </td>
 
                       {/* 4. DEPARTMENT */}
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-2.5 whitespace-nowrap">
                         <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-slate-100 text-slate-700 border border-slate-200">
                           {item.employeeType}
                         </span>
                       </td>
 
                       {/* 5. Present/Machine */}
-                      <td className="px-4 py-3 text-center bg-indigo-50/30">
+                      <td className="px-3 py-2.5 text-center bg-indigo-50/50 border-l border-r border-indigo-100">
                         <span className={`font-mono font-black text-xs px-2.5 py-0.5 rounded-md border ${
                           item.presentMachineValue > 0 
                             ? 'text-indigo-700 bg-indigo-50 border-indigo-200' 
@@ -607,20 +652,46 @@ export default function LoomReportsRegister({
                           {item.presentMachineValue}
                         </span>
                       </td>
+
+                      {/* 6. Date-wise Columns */}
+                      {dateList.map(d => {
+                        const val = item.dailyValues?.[d] || 0;
+                        return (
+                          <td key={d} className="px-2 py-2 text-center font-mono text-xs border-r border-slate-100">
+                            {val > 0 ? (
+                              <span className="font-bold text-slate-900 bg-emerald-50 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded text-[11px]">
+                                {val}
+                              </span>
+                            ) : (
+                              <span className="text-slate-300 font-light">-</span>
+                            )}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))
                 )}
               </tbody>
               {filteredRows.length > 0 && (
-                <tfoot className="bg-slate-100 font-extrabold text-slate-900 border-t-2 border-slate-200 sticky bottom-0 z-10">
+                <tfoot className="bg-slate-100 font-extrabold text-slate-900 border-t-2 border-slate-300 sticky bottom-0 z-20">
                   <tr>
-                    <td className="px-4 py-3 text-center font-bold text-slate-400">#</td>
-                    <td className="px-4 py-3 uppercase text-[10px] text-slate-500">TOTAL</td>
-                    <td className="px-4 py-3 text-slate-900">{filteredRows.length} Workers</td>
-                    <td className="px-4 py-3"></td>
-                    <td className="px-4 py-3 text-center text-indigo-700 font-black font-mono">
+                    <td className="px-3 py-2.5 text-center font-bold text-slate-400 sticky left-0 bg-slate-100 z-30">#</td>
+                    <td className="px-3 py-2.5 uppercase text-[10px] text-slate-500 sticky left-12 bg-slate-100 z-30">TOTAL</td>
+                    <td className="px-3 py-2.5 text-slate-900 sticky left-36 bg-slate-100 z-30 whitespace-nowrap shadow-[2px_0_4px_-2px_rgba(0,0,0,0.1)]">
+                      {filteredRows.length} Workers
+                    </td>
+                    <td className="px-3 py-2.5"></td>
+                    <td className="px-3 py-2.5 text-center text-indigo-700 font-black font-mono border-l border-r border-indigo-200 bg-indigo-100/50">
                       {totalPresentMachine}
                     </td>
+                    {dateList.map(d => {
+                      const dayTotal = filteredRows.reduce((sum, item) => sum + (item.dailyValues?.[d] || 0), 0);
+                      return (
+                        <td key={d} className="px-2 py-2 text-center text-slate-800 font-bold font-mono border-r border-slate-200 text-xs">
+                          {dayTotal > 0 ? dayTotal : '-'}
+                        </td>
+                      );
+                    })}
                   </tr>
                 </tfoot>
               )}
@@ -637,6 +708,7 @@ export default function LoomReportsRegister({
         startDate={startDate}
         endDate={endDate}
         companyName={activeCompanyName}
+        dateList={dateList}
         data={filteredRows}
       />
     </div>
