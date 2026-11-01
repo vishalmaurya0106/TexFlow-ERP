@@ -35,6 +35,7 @@ export default function OtherAttendanceRegister({
   const otherStaff = workers.filter(w => w.isActive && w.employeeType === 'Others');
 
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedShift, setSelectedShift] = useState<'Day' | 'Night'>('Day');
   const [savingId, setSavingId] = useState<string | null>(null);
   const [saveAllSuccess, setSaveAllSuccess] = useState(false);
 
@@ -46,20 +47,20 @@ export default function OtherAttendanceRegister({
   const [deleteAttendanceId, setDeleteAttendanceId] = useState('');
   const [deleteAttendanceMessage, setDeleteAttendanceMessage] = useState('');
 
-  // Get saved attendance status for a worker on the selected date
+  // Get saved attendance status for a worker on the selected date & shift
   const getSavedAttendance = (workerId: string) => {
-    return adminAttendances.find(a => a.workerId === workerId && a.date === selectedDate);
+    return adminAttendances.find(a => a.workerId === workerId && a.date === selectedDate && (a.shift || 'Day') === selectedShift);
   };
 
-  // Synchronize staged selections whenever date or saved records change
+  // Synchronize staged selections whenever date, shift or saved records change
   useEffect(() => {
     const newStaged: Record<string, AttendanceStatus> = {};
     otherStaff.forEach(staff => {
-      const rec = adminAttendances.find(a => a.workerId === staff.workerId && a.date === selectedDate);
+      const rec = adminAttendances.find(a => a.workerId === staff.workerId && a.date === selectedDate && (a.shift || 'Day') === selectedShift);
       newStaged[staff.workerId] = rec ? rec.status : 'Present';
     });
     setStagedStatuses(newStaged);
-  }, [selectedDate, adminAttendances, workers]);
+  }, [selectedDate, selectedShift, adminAttendances, workers]);
 
   const handleSelectStatus = (workerId: string, status: AttendanceStatus) => {
     setStagedStatuses(prev => ({
@@ -81,14 +82,15 @@ export default function OtherAttendanceRegister({
       calculatedWage = 0;
     }
 
-    const matchedId = adminAttendances.find(a => a.workerId === staff.workerId && a.date === selectedDate)?.adminAttendanceId;
+    const matchedId = adminAttendances.find(a => a.workerId === staff.workerId && a.date === selectedDate && (a.shift || 'Day') === selectedShift)?.adminAttendanceId;
 
     const payload: AdminAttendance = {
-      adminAttendanceId: matchedId || `AA-${Date.now()}-${staff.workerId}`,
+      adminAttendanceId: matchedId || `AA-${Date.now()}-${staff.workerId}-${selectedShift.toLowerCase()}`,
       workerId: staff.workerId,
       date: selectedDate,
       status,
-      calculatedWage: parseFloat(calculatedWage.toFixed(2))
+      calculatedWage: parseFloat(calculatedWage.toFixed(2)),
+      shift: selectedShift
     };
 
     onAddAdminAttendance(payload);
@@ -110,14 +112,15 @@ export default function OtherAttendanceRegister({
         calculatedWage = 0;
       }
 
-      const matchedId = adminAttendances.find(a => a.workerId === staff.workerId && a.date === selectedDate)?.adminAttendanceId;
+      const matchedId = adminAttendances.find(a => a.workerId === staff.workerId && a.date === selectedDate && (a.shift || 'Day') === selectedShift)?.adminAttendanceId;
 
       const payload: AdminAttendance = {
-        adminAttendanceId: matchedId || `AA-${Date.now()}-${staff.workerId}`,
+        adminAttendanceId: matchedId || `AA-${Date.now()}-${staff.workerId}-${selectedShift.toLowerCase()}`,
         workerId: staff.workerId,
         date: selectedDate,
         status,
-        calculatedWage: parseFloat(calculatedWage.toFixed(2))
+        calculatedWage: parseFloat(calculatedWage.toFixed(2)),
+        shift: selectedShift
       };
 
       onAddAdminAttendance(payload);
@@ -173,7 +176,7 @@ export default function OtherAttendanceRegister({
               </div>
             </div>
 
-            {/* Date Select & Batch Save */}
+            {/* Date Select, Shift Toggle & Batch Save */}
             <div className="flex flex-wrap items-center gap-2.5">
               <DateInput
                 id="other-att-date-input"
@@ -182,6 +185,34 @@ export default function OtherAttendanceRegister({
                 className="w-40 shadow-2xs"
               />
 
+              {/* Shift Toggle */}
+              <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200">
+                <button
+                  type="button"
+                  id="other-shift-day-btn"
+                  onClick={() => setSelectedShift('Day')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                    selectedShift === 'Day'
+                      ? 'bg-white text-indigo-600 shadow-xs'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  ☀️ Day
+                </button>
+                <button
+                  type="button"
+                  id="other-shift-night-btn"
+                  onClick={() => setSelectedShift('Night')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                    selectedShift === 'Night'
+                      ? 'bg-slate-900 text-indigo-300 shadow-xs'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  🌙 Night
+                </button>
+              </div>
+
               {sortedStaff.length > 0 && (
                 <button
                   id="other-att-save-all-btn"
@@ -189,7 +220,7 @@ export default function OtherAttendanceRegister({
                   className="flex items-center gap-1.5 px-3.5 py-2.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-bold rounded-xl text-xs transition-all cursor-pointer shadow-sm"
                 >
                   <Save className="h-4 w-4" />
-                  {saveAllSuccess ? 'Saved All!' : 'Save All Staff'}
+                  {saveAllSuccess ? 'Saved All!' : `Save All Staff (${selectedShift})`}
                 </button>
               )}
             </div>
@@ -442,6 +473,13 @@ export default function OtherAttendanceRegister({
                                   : 'bg-rose-50 text-rose-700 border border-rose-200'
                               }`}>
                                 {isSupervisor2 ? log.status : `${log.status} (${formatCurrency(log.calculatedWage)})`}
+                              </span>
+                              <span className={`text-[9px] font-bold rounded-full px-2 py-0.5 flex items-center gap-0.5 border ${
+                                (log.shift || 'Day') === 'Night' 
+                                  ? 'bg-slate-900 text-indigo-300 border-slate-700' 
+                                  : 'bg-amber-50 text-amber-700 border-amber-200'
+                              }`}>
+                                {(log.shift || 'Day') === 'Night' ? '🌙 Night' : '☀️ Day'}
                               </span>
 
                               {isAdmin && (

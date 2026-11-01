@@ -160,7 +160,8 @@ export async function fetchFirebaseAdminAttendances(): Promise<AdminAttendance[]
       workerId: data.workerId || '',
       date: data.date || '',
       status: data.status || 'Present',
-      calculatedWage: Number(data.calculatedWage ?? 0)
+      calculatedWage: Number(data.calculatedWage ?? 0),
+      shift: data.shift || 'Day'
     };
   });
 }
@@ -176,7 +177,8 @@ export async function fetchFirebaseAttendances(): Promise<Attendance[]> {
       date: data.date || '',
       status: data.status || 'Present',
       inTime: data.inTime || '',
-      outTime: data.outTime || ''
+      outTime: data.outTime || '',
+      shift: data.shift || 'Day'
     };
   });
 }
@@ -578,7 +580,8 @@ export function subscribeFirebaseAdminAttendances(onData: (attendances: AdminAtt
         workerId: data.workerId || '',
         date: data.date || '',
         status: data.status || 'Present',
-        calculatedWage: Number(data.calculatedWage ?? 0)
+        calculatedWage: Number(data.calculatedWage ?? 0),
+        shift: data.shift || 'Day'
       };
     });
     onData(list);
@@ -598,7 +601,8 @@ export function subscribeFirebaseAttendances(onData: (attendances: Attendance[])
         date: data.date || '',
         status: data.status || 'Present',
         inTime: data.inTime || '',
-        outTime: data.outTime || ''
+        outTime: data.outTime || '',
+        shift: data.shift || 'Day'
       };
     });
     onData(list);

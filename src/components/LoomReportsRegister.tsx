@@ -67,7 +67,7 @@ export default function LoomReportsRegister({
 
   // Filter state
   const [selectedCompanyFilter, setSelectedCompanyFilter] = useState<string>('ALL');
-  const [selectedDepartmentFilter, setSelectedDepartmentFilter] = useState<'Worker' | 'ALL'>('Worker');
+  const [selectedDepartmentFilter, setSelectedDepartmentFilter] = useState<'Worker' | 'Admin Employee' | 'Others' | 'ALL'>('Worker');
   const [showOnlyActiveRuns, setShowOnlyActiveRuns] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -155,32 +155,27 @@ export default function LoomReportsRegister({
         });
       } else {
         // Admin Staff or Other Staff: attendance from adminAttendances & attendances
-        const aaMap = new Map<string, AdminAttendance>();
-        (adminAttendances || []).forEach(aa => {
-          if (aa.workerId === worker.workerId && aa.date >= startDate && aa.date <= endDate) {
-            aaMap.set(aa.date, aa);
-          }
-        });
-
-        const attMap = new Map<string, Attendance>();
-        (attendances || []).forEach(a => {
-          if (a.workerId === worker.workerId && a.date >= startDate && a.date <= endDate) {
-            attMap.set(a.date, a);
-          }
-        });
+        const workerAAs = (adminAttendances || []).filter(aa => 
+          aa.workerId === worker.workerId && aa.date >= startDate && aa.date <= endDate
+        );
+        const workerAtts = (attendances || []).filter(a => 
+          a.workerId === worker.workerId && a.date >= startDate && a.date <= endDate
+        );
 
         dateList.forEach(d => {
           let dayVal = 0;
-          const aa = aaMap.get(d);
-          if (aa) {
-            if (aa.status === 'Present') dayVal = 1;
-            else if (aa.status === 'Half-Day') dayVal = 0.5;
+          const dayAAs = workerAAs.filter(aa => aa.date === d);
+          if (dayAAs.length > 0) {
+            dayAAs.forEach(aa => {
+              if (aa.status === 'Present') dayVal += 1;
+              else if (aa.status === 'Half-Day') dayVal += 0.5;
+            });
           } else {
-            const a = attMap.get(d);
-            if (a) {
-              if (a.status === 'Present') dayVal = 1;
-              else if (a.status === 'Half-Day') dayVal = 0.5;
-            }
+            const dayAtts = workerAtts.filter(a => a.date === d);
+            dayAtts.forEach(a => {
+              if (a.status === 'Present') dayVal += 1;
+              else if (a.status === 'Half-Day') dayVal += 0.5;
+            });
           }
           dailyValues[d] = dayVal;
           presentDays += dayVal;
@@ -269,9 +264,18 @@ export default function LoomReportsRegister({
 
     const summaryRow = ['', 'TOTAL', `${filteredRows.length} Workers`, '', totalPresentMachine, ...dateTotals];
 
+    const filterTitle = selectedDepartmentFilter === 'Worker'
+      ? 'Loom Operators'
+      : selectedDepartmentFilter === 'Admin Employee'
+      ? 'Admin Attendance'
+      : selectedDepartmentFilter === 'Others'
+      ? 'Other Attendance'
+      : 'All Staff';
+
     const sheetData = [
-      ['TEXFLOW TEXTILES - LOOM PRODUCTION & MACHINE REPORT'],
+      ['TEXFLOW TEXTILES - ATTENDANCE & PRODUCTION REPORT'],
       [`Company: ${companyTitle}`],
+      [`Staff Filter: ${filterTitle}`],
       [`Date Range: ${formatDate(startDate)} to ${formatDate(endDate)}`],
       [`Generated: ${new Date().toLocaleDateString('en-IN')}`],
       [], // Blank row
@@ -482,12 +486,13 @@ export default function LoomReportsRegister({
 
         {/* Secondary Filters: Department toggle */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100">
-          <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
+          <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-600">
             <Filter className="h-3.5 w-3.5 text-indigo-500" />
             <span>Staff Filter:</span>
-            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
+            <div className="inline-flex flex-wrap rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
               <button
                 type="button"
+                id="report-filter-loom"
                 onClick={() => setSelectedDepartmentFilter('Worker')}
                 className={`px-3 py-1 rounded-md font-bold transition-all cursor-pointer ${
                   selectedDepartmentFilter === 'Worker' 
@@ -495,10 +500,35 @@ export default function LoomReportsRegister({
                     : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
-                Loom Operators Only
+                Loom Operators
               </button>
               <button
                 type="button"
+                id="report-filter-admin"
+                onClick={() => setSelectedDepartmentFilter('Admin Employee')}
+                className={`px-3 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                  selectedDepartmentFilter === 'Admin Employee' 
+                    ? 'bg-white text-indigo-700 shadow-xs' 
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Admin Attendance
+              </button>
+              <button
+                type="button"
+                id="report-filter-others"
+                onClick={() => setSelectedDepartmentFilter('Others')}
+                className={`px-3 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                  selectedDepartmentFilter === 'Others' 
+                    ? 'bg-white text-indigo-700 shadow-xs' 
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Other Attendance
+              </button>
+              <button
+                type="button"
+                id="report-filter-all"
                 onClick={() => setSelectedDepartmentFilter('ALL')}
                 className={`px-3 py-1 rounded-md font-bold transition-all cursor-pointer ${
                   selectedDepartmentFilter === 'ALL' 
@@ -708,6 +738,15 @@ export default function LoomReportsRegister({
         startDate={startDate}
         endDate={endDate}
         companyName={activeCompanyName}
+        departmentFilterTitle={
+          selectedDepartmentFilter === 'Worker'
+            ? 'Loom Operators'
+            : selectedDepartmentFilter === 'Admin Employee'
+            ? 'Admin Attendance'
+            : selectedDepartmentFilter === 'Others'
+            ? 'Other Attendance'
+            : 'All Staff'
+        }
         dateList={dateList}
         data={filteredRows}
       />

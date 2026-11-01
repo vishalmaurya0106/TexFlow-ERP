@@ -25,6 +25,7 @@ interface LoomReportPDFModalProps {
   startDate: string;
   endDate: string;
   companyName: string;
+  departmentFilterTitle?: string;
   dateList?: string[];
   data: LoomReportItem[];
 }
@@ -44,6 +45,7 @@ export default function LoomReportPDFModal({
   startDate,
   endDate,
   companyName,
+  departmentFilterTitle,
   dateList = [],
   data
 }: LoomReportPDFModalProps) {
@@ -204,7 +206,7 @@ export default function LoomReportPDFModal({
               </div>
               <div className="text-right">
                 <span className="inline-block px-3 py-1 bg-indigo-50 text-indigo-700 text-xs font-black uppercase rounded-lg border border-indigo-200">
-                  LOOM PRODUCTION REPORT
+                  {departmentFilterTitle ? `${departmentFilterTitle.toUpperCase()} REPORT` : 'LOOM PRODUCTION REPORT'}
                 </span>
                 <p className="text-xs font-bold text-slate-700 mt-2 flex items-center justify-end gap-1.5">
                   <Calendar className="h-3.5 w-3.5 text-slate-400" />

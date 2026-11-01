@@ -57,6 +57,7 @@ export interface Attendance {
   status: AttendanceStatus;
   inTime: string; // HH:MM
   outTime: string; // HH:MM
+  shift?: 'Day' | 'Night';
 }
 
 export interface DailyWork {
@@ -76,6 +77,7 @@ export interface AdminAttendance {
   date: string; // YYYY-MM-DD
   status: AttendanceStatus;
   calculatedWage: number; // Present = full, Half-Day = half, Absent = 0
+  shift?: 'Day' | 'Night';
 }
 
 export interface Salary {
