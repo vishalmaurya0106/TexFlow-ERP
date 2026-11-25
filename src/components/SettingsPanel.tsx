@@ -15,9 +15,9 @@ import { Company, Worker } from '../types';
 interface SettingsPanelProps {
   companies: Company[];
   workers: Worker[];
-  onAddCompany: (name: string) => void;
-  onUpdateCompany: (companyId: string, newName: string) => void;
-  onDeleteCompany: (companyId: string) => void;
+  onAddCompany: (name: string) => Promise<void> | void;
+  onUpdateCompany: (companyId: string, newName: string) => Promise<void> | void;
+  onDeleteCompany: (companyId: string) => Promise<void> | void;
   cloudStatus?: string;
   cloudMsg?: string;
   firebaseProjectId?: string;
@@ -59,12 +59,18 @@ export default function SettingsPanel({
   const [editingCompanyId, setEditingCompanyId] = useState<string | null>(null);
   const [editingCompanyName, setEditingCompanyName] = useState('');
   const [companyError, setCompanyError] = useState('');
+  const [isSavingCompany, setIsSavingCompany] = useState(false);
 
-  const handleCreateCompanySubmit = (e: React.FormEvent) => {
+  const handleCreateCompanySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingCompany) return;
     const trimmed = newCompanyName.trim();
     if (!trimmed) {
       setCompanyError('Company name cannot be empty');
+      return;
+    }
+    if (trimmed.length > 120) {
+      setCompanyError('Company name cannot exceed 120 characters');
       return;
     }
     if (companies.some(c => c.name.toLowerCase() === trimmed.toLowerCase())) {
@@ -72,8 +78,15 @@ export default function SettingsPanel({
       return;
     }
     setCompanyError('');
-    onAddCompany(trimmed);
-    setNewCompanyName('');
+    setIsSavingCompany(true);
+    try {
+      await onAddCompany(trimmed);
+      setNewCompanyName('');
+    } catch (err: any) {
+      setCompanyError(err?.message || 'Failed to add company.');
+    } finally {
+      setIsSavingCompany(false);
+    }
   };
 
   const handleStartEdit = (comp: Company) => {
@@ -82,17 +95,29 @@ export default function SettingsPanel({
     setCompanyError('');
   };
 
-  const handleSaveEdit = (companyId: string) => {
+  const handleSaveEdit = async (companyId: string) => {
+    if (isSavingCompany) return;
     const trimmed = editingCompanyName.trim();
     if (!trimmed) return;
+    if (trimmed.length > 120) {
+      setCompanyError('Company name cannot exceed 120 characters');
+      return;
+    }
     if (companies.some(c => c.companyId !== companyId && c.name.toLowerCase() === trimmed.toLowerCase())) {
       setCompanyError('Another company already has this name');
       return;
     }
     setCompanyError('');
-    onUpdateCompany(companyId, trimmed);
-    setEditingCompanyId(null);
-    setEditingCompanyName('');
+    setIsSavingCompany(true);
+    try {
+      await onUpdateCompany(companyId, trimmed);
+      setEditingCompanyId(null);
+      setEditingCompanyName('');
+    } catch (err: any) {
+      setCompanyError(err?.message || 'Failed to update company.');
+    } finally {
+      setIsSavingCompany(false);
+    }
   };
 
   if (!isAdmin) {
@@ -188,10 +213,11 @@ export default function SettingsPanel({
             </div>
             <button
               type="submit"
-              className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm shrink-0 cursor-pointer"
+              disabled={isSavingCompany}
+              className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 active:scale-98 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm shrink-0 cursor-pointer"
             >
               <Plus className="h-4 w-4" />
-              <span>Add Company</span>
+              <span>{isSavingCompany ? 'Saving...' : 'Add Company'}</span>
             </button>
           </form>
 
@@ -233,9 +259,10 @@ export default function SettingsPanel({
                           />
                           <button
                             type="button"
+                            disabled={isSavingCompany}
                             onClick={() => handleSaveEdit(comp.companyId)}
                             title="Save"
-                            className="p-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 cursor-pointer"
+                            className="p-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-60 cursor-pointer"
                           >
                             <Check className="h-3.5 w-3.5" />
                           </button>

@@ -8,16 +8,18 @@ import { Worker, AdminAttendance, AttendanceStatus } from '../types';
 import { formatCurrency, formatDate, naturalSortWorkers } from '../utils';
 import ConfirmModal from './ConfirmModal';
 import { DateInput } from './DateInput';
+import { buildDeterministicAdminAttId } from '../lib/firebase';
 import { 
-  Users, UserCheck, ClipboardCheck, 
-  Trash2, Plus, Info, Check, Sparkles, Save, Filter, X 
+  Users, ClipboardCheck, 
+  Trash2, Info, Check, Save, Filter, X, AlertTriangle 
 } from 'lucide-react';
 
 interface OtherAttendanceRegisterProps {
   workers: Worker[];
   adminAttendances: AdminAttendance[];
-  onAddAdminAttendance: (attendance: AdminAttendance) => void;
-  onDeleteAdminAttendance: (id: string) => void;
+  onAddAdminAttendance: (attendance: AdminAttendance) => Promise<void> | void;
+  onBatchAdminAttendance?: (records: AdminAttendance[]) => Promise<void> | void;
+  onDeleteAdminAttendance: (id: string) => Promise<void> | void;
   isAdmin?: boolean;
   isSupervisor2?: boolean;
 }
@@ -26,6 +28,7 @@ export default function OtherAttendanceRegister({
   workers,
   adminAttendances,
   onAddAdminAttendance,
+  onBatchAdminAttendance,
   onDeleteAdminAttendance,
   isAdmin = false,
   isSupervisor2 = false
@@ -37,7 +40,9 @@ export default function OtherAttendanceRegister({
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedShift, setSelectedShift] = useState<'Day' | 'Night'>('Day');
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [isSavingAll, setIsSavingAll] = useState(false);
   const [saveAllSuccess, setSaveAllSuccess] = useState(false);
+  const [errorBanner, setErrorBanner] = useState('');
 
   // Staged selection before clicking save
   const [stagedStatuses, setStagedStatuses] = useState<Record<string, AttendanceStatus>>({});
@@ -46,6 +51,7 @@ export default function OtherAttendanceRegister({
   const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = useState(false);
   const [deleteAttendanceId, setDeleteAttendanceId] = useState('');
   const [deleteAttendanceMessage, setDeleteAttendanceMessage] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Get saved attendance status for a worker on the selected date & shift
   const getSavedAttendance = (workerId: string) => {
@@ -69,9 +75,11 @@ export default function OtherAttendanceRegister({
     }));
   };
 
-  const handleSaveSingleStaff = (staff: Worker) => {
+  const handleSaveSingleStaff = async (staff: Worker) => {
+    if (savingId === staff.workerId || isSavingAll) return;
     const status = stagedStatuses[staff.workerId] || 'Present';
     setSavingId(staff.workerId);
+    setErrorBanner('');
 
     let calculatedWage = 0;
     if (status === 'Present') {
@@ -85,7 +93,7 @@ export default function OtherAttendanceRegister({
     const matchedId = adminAttendances.find(a => a.workerId === staff.workerId && a.date === selectedDate && (a.shift || 'Day') === selectedShift)?.adminAttendanceId;
 
     const payload: AdminAttendance = {
-      adminAttendanceId: matchedId || `AA-${Date.now()}-${staff.workerId}-${selectedShift.toLowerCase()}`,
+      adminAttendanceId: matchedId || buildDeterministicAdminAttId(selectedDate, selectedShift, staff.workerId),
       workerId: staff.workerId,
       date: selectedDate,
       status,
@@ -93,15 +101,21 @@ export default function OtherAttendanceRegister({
       shift: selectedShift
     };
 
-    onAddAdminAttendance(payload);
-
-    setTimeout(() => {
+    try {
+      await onAddAdminAttendance(payload);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Failed to save attendance record.');
+    } finally {
       setSavingId(null);
-    }, 500);
+    }
   };
 
-  const handleSaveAllStaff = () => {
-    otherStaff.forEach(staff => {
+  const handleSaveAllStaff = async () => {
+    if (isSavingAll || otherStaff.length === 0) return;
+    setIsSavingAll(true);
+    setErrorBanner('');
+
+    const payloads: AdminAttendance[] = otherStaff.map(staff => {
       const status = stagedStatuses[staff.workerId] || 'Present';
       let calculatedWage = 0;
       if (status === 'Present') {
@@ -114,22 +128,31 @@ export default function OtherAttendanceRegister({
 
       const matchedId = adminAttendances.find(a => a.workerId === staff.workerId && a.date === selectedDate && (a.shift || 'Day') === selectedShift)?.adminAttendanceId;
 
-      const payload: AdminAttendance = {
-        adminAttendanceId: matchedId || `AA-${Date.now()}-${staff.workerId}-${selectedShift.toLowerCase()}`,
+      return {
+        adminAttendanceId: matchedId || buildDeterministicAdminAttId(selectedDate, selectedShift, staff.workerId),
         workerId: staff.workerId,
         date: selectedDate,
         status,
         calculatedWage: parseFloat(calculatedWage.toFixed(2)),
         shift: selectedShift
       };
-
-      onAddAdminAttendance(payload);
     });
 
-    setSaveAllSuccess(true);
-    setTimeout(() => {
-      setSaveAllSuccess(false);
-    }, 1500);
+    try {
+      if (onBatchAdminAttendance) {
+        await onBatchAdminAttendance(payloads);
+      } else {
+        for (const p of payloads) {
+          await onAddAdminAttendance(p);
+        }
+      }
+      setSaveAllSuccess(true);
+      setTimeout(() => setSaveAllSuccess(false), 1500);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Failed to save all staff attendance.');
+    } finally {
+      setIsSavingAll(false);
+    }
   };
 
   // Date Range Filter State (Default to Today)
@@ -140,8 +163,8 @@ export default function OtherAttendanceRegister({
   // Sorted staff list by Employee ID (Natural Sort)
   const sortedStaff = naturalSortWorkers(otherStaff);
 
-  // Group logs by date for other staff
-  const otherStaffIds = new Set(otherStaff.map(s => s.workerId));
+  // Include ALL Others staff IDs (including inactive) so historical logs remain intact
+  const otherStaffIds = new Set(workers.filter(w => w.employeeType === 'Others').map(w => w.workerId));
   const otherAttendancesList = adminAttendances.filter(a => otherStaffIds.has(a.workerId));
 
   // Filter by date range
@@ -216,15 +239,23 @@ export default function OtherAttendanceRegister({
               {sortedStaff.length > 0 && (
                 <button
                   id="other-att-save-all-btn"
+                  disabled={isSavingAll}
                   onClick={handleSaveAllStaff}
-                  className="flex items-center gap-1.5 px-3.5 py-2.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-bold rounded-xl text-xs transition-all cursor-pointer shadow-sm"
+                  className="flex items-center gap-1.5 px-3.5 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-60 active:bg-amber-800 text-white font-bold rounded-xl text-xs transition-all cursor-pointer shadow-sm"
                 >
                   <Save className="h-4 w-4" />
-                  {saveAllSuccess ? 'Saved All!' : `Save All Staff (${selectedShift})`}
+                  {isSavingAll ? 'Saving All...' : saveAllSuccess ? 'Saved All!' : `Save All Staff (${selectedShift})`}
                 </button>
               )}
             </div>
           </div>
+
+          {errorBanner && (
+            <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs font-bold flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+              <span>{errorBanner}</span>
+            </div>
+          )}
 
           {/* Active Other Staff List */}
           {sortedStaff.length === 0 ? (
@@ -320,7 +351,7 @@ export default function OtherAttendanceRegister({
                       <button
                         type="button"
                         onClick={() => handleSaveSingleStaff(staff)}
-                        disabled={isSaving}
+                        disabled={isSaving || isSavingAll}
                         className="px-3 py-2 bg-slate-900 hover:bg-slate-800 active:bg-black text-white font-bold rounded-xl text-xs transition-all cursor-pointer shrink-0 disabled:opacity-50"
                       >
                         {isSaving ? '...' : 'Save'}
@@ -514,20 +545,32 @@ export default function OtherAttendanceRegister({
         isOpen={isConfirmDeleteOpen}
         title="Delete Attendance Record"
         message={deleteAttendanceMessage}
-        confirmLabel="Delete Record"
+        confirmLabel={isDeleting ? 'Deleting...' : 'Delete Record'}
         cancelLabel="Cancel"
-        onConfirm={() => {
-          if (!isAdmin) {
-            setIsConfirmDeleteOpen(false);
+        onConfirm={async () => {
+          if (!isAdmin || isDeleting) {
+            if (!isAdmin) setIsConfirmDeleteOpen(false);
             return;
           }
           if (deleteAttendanceId) {
-            onDeleteAdminAttendance(deleteAttendanceId);
-            setDeleteAttendanceId('');
+            setIsDeleting(true);
+            setErrorBanner('');
+            try {
+              await onDeleteAdminAttendance(deleteAttendanceId);
+              setDeleteAttendanceId('');
+              setIsConfirmDeleteOpen(false);
+            } catch (err: any) {
+              setErrorBanner(err?.message || 'Failed to delete attendance record.');
+              setIsConfirmDeleteOpen(false);
+            } finally {
+              setIsDeleting(false);
+            }
+          } else {
+            setIsConfirmDeleteOpen(false);
           }
-          setIsConfirmDeleteOpen(false);
         }}
         onCancel={() => {
+          if (isDeleting) return;
           setDeleteAttendanceId('');
           setIsConfirmDeleteOpen(false);
         }}

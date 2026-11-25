@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Worker, Salary, DailyWork, AdminAttendance, PayrollStatus, Company, Attendance } from '../types';
 import { formatCurrency, naturalSortWorkers } from '../utils';
 import { FileText, Calendar, Check, Landmark, ArrowUpRight, 
   Settings, Percent, CreditCard, CheckCircle2, AlertCircle,
-  Search, Download, Building2, Filter, Layers, Calculator
+  Search, Download, Building2, Filter, Layers, Calculator, X
 } from 'lucide-react';
 import SalarySlipPDF from './SalarySlipPDF';
 import { DateInput } from './DateInput';
@@ -21,7 +21,7 @@ interface MonthlySalarySheetProps {
   dailyWorks: DailyWork[];
   adminAttendances: AdminAttendance[];
   attendances?: Attendance[];
-  onUpdateSalary: (salary: Salary) => void;
+  onUpdateSalary: (salary: Salary) => Promise<void> | void;
 }
 
 export default function MonthlySalarySheet({
@@ -50,6 +50,30 @@ export default function MonthlySalarySheet({
   // Date Range State for Bank File Download
   const [exportStartDate, setExportStartDate] = useState('');
   const [exportEndDate, setExportEndDate] = useState('');
+
+  // Validation / Draft / Debounce / Status Lock States
+  const [validationError, setValidationError] = useState('');
+  const [togglingWorkerId, setTogglingWorkerId] = useState<string | null>(null);
+  const [draftValues, setDraftValues] = useState<Record<string, { bonus?: string; advance?: string; deductions?: string }>>({});
+  const draftValuesRef = useRef<Record<string, { bonus?: string; advance?: string; deductions?: string }>>({});
+  const saveTimersRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    draftValuesRef.current = draftValues;
+  }, [draftValues]);
+
+  useEffect(() => {
+    (Object.values(saveTimersRef.current) as number[]).forEach(t => window.clearTimeout(t));
+    saveTimersRef.current = {};
+    setDraftValues({});
+    draftValuesRef.current = {};
+  }, [selectedMonth]);
+
+  useEffect(() => {
+    return () => {
+      (Object.values(saveTimersRef.current) as number[]).forEach(t => window.clearTimeout(t));
+    };
+  }, []);
 
   // Available unique company names
   const availableCompanyNames = useMemo(() => {
@@ -138,10 +162,14 @@ export default function MonthlySalarySheet({
   // Export Bank Excel/CSV File
   const handleDownloadBankFile = () => {
     if (!exportStartDate || !exportEndDate) {
-      alert("Error: Date cannot be zero! Page is refreshing...");
-      window.location.reload();
+      setValidationError('Please select both Start Date and End Date before downloading bank CSV.');
       return;
     }
+    if (exportStartDate > exportEndDate) {
+      setValidationError('Start Date cannot be later than End Date.');
+      return;
+    }
+    setValidationError('');
 
     // Headers ordered exactly according to sample image
     const headers = [
@@ -252,33 +280,132 @@ export default function MonthlySalarySheet({
     document.body.removeChild(link);
   };
 
-  const handleUpdateField = (workerId: string, baseSal: number, field: 'bonus' | 'advance' | 'deductions', valueStr: string) => {
+  const commitFieldChange = async (
+    workerId: string,
+    baseSal: number,
+    field: 'bonus' | 'advance' | 'deductions',
+    valueStr: string
+  ) => {
     const parsedVal = parseFloat(valueStr);
-    const value = isNaN(parsedVal) || parsedVal < 0 ? 0 : parseFloat(parsedVal.toFixed(2));
-    
+    const value = isNaN(parsedVal) || parsedVal < 0 ? 0 : Math.min(100000000, parseFloat(parsedVal.toFixed(2)));
+
     const record = getSalaryRecord(workerId, baseSal);
-    const updatedRecord = { ...record };
-    
+    if (record.status === 'Paid') {
+      setValidationError('Salary record is marked Paid. Click Paid status to reopen as Pending before modifying amounts.');
+      return;
+    }
+
+    const drafts = draftValuesRef.current[workerId] || {};
+    const updatedRecord: Salary = {
+      ...record,
+      bonus: drafts.bonus !== undefined ? (parseFloat(drafts.bonus) || 0) : record.bonus,
+      advance: drafts.advance !== undefined ? (parseFloat(drafts.advance) || 0) : record.advance,
+      deductions: drafts.deductions !== undefined ? (parseFloat(drafts.deductions) || 0) : record.deductions
+    };
+
     if (field === 'bonus') updatedRecord.bonus = value;
     if (field === 'advance') updatedRecord.advance = value;
     if (field === 'deductions') updatedRecord.deductions = value;
 
-    // Recalculate net final
     updatedRecord.netSalary = parseFloat((updatedRecord.baseSalary + updatedRecord.bonus - updatedRecord.advance - updatedRecord.deductions).toFixed(2));
 
-    onUpdateSalary(updatedRecord);
+    try {
+      setValidationError('');
+      await onUpdateSalary(updatedRecord);
+      setDraftValues(prev => {
+        const next = { ...prev };
+        if (next[workerId]) {
+          const copy = { ...next[workerId] };
+          delete copy[field];
+          if (Object.keys(copy).length === 0) delete next[workerId];
+          else next[workerId] = copy;
+        }
+        return next;
+      });
+    } catch (err: any) {
+      setValidationError(err?.message || 'Failed to save salary adjustment.');
+    }
   };
 
-  const handleToggleStatus = (workerId: string, baseSal: number) => {
+  const handleFieldInputChange = (
+    workerId: string,
+    baseSal: number,
+    field: 'bonus' | 'advance' | 'deductions',
+    valueStr: string
+  ) => {
+    setDraftValues(prev => ({
+      ...prev,
+      [workerId]: { ...(prev[workerId] || {}), [field]: valueStr }
+    }));
+
+    const timerKey = `${workerId}__${field}`;
+    if (saveTimersRef.current[timerKey]) {
+      window.clearTimeout(saveTimersRef.current[timerKey]);
+    }
+    saveTimersRef.current[timerKey] = window.setTimeout(() => {
+      delete saveTimersRef.current[timerKey];
+      commitFieldChange(workerId, baseSal, field, valueStr);
+    }, 450);
+  };
+
+  const handleFieldInputBlur = (
+    workerId: string,
+    baseSal: number,
+    field: 'bonus' | 'advance' | 'deductions'
+  ) => {
+    const timerKey = `${workerId}__${field}`;
+    if (saveTimersRef.current[timerKey]) {
+      window.clearTimeout(saveTimersRef.current[timerKey]);
+      delete saveTimersRef.current[timerKey];
+      const valStr = draftValuesRef.current[workerId]?.[field];
+      if (valStr !== undefined) {
+        commitFieldChange(workerId, baseSal, field, valStr);
+      }
+    }
+  };
+
+  const handleToggleStatus = async (workerId: string, baseSal: number) => {
+    if (togglingWorkerId) return;
+    setTogglingWorkerId(workerId);
+    setValidationError('');
+
+    // Clear any pending field debounce timers for this worker and apply pending drafts
+    (['bonus', 'advance', 'deductions'] as const).forEach(f => {
+      const tk = `${workerId}__${f}`;
+      if (saveTimersRef.current[tk]) {
+        window.clearTimeout(saveTimersRef.current[tk]);
+        delete saveTimersRef.current[tk];
+      }
+    });
+
     const record = getSalaryRecord(workerId, baseSal);
+    const drafts = draftValuesRef.current[workerId] || {};
     const newStatus: PayrollStatus = record.status === 'Paid' ? 'Pending' : 'Paid';
-    
-    const updatedRecord = {
+    const bonus = drafts.bonus !== undefined ? Math.max(0, parseFloat(drafts.bonus) || 0) : record.bonus;
+    const advance = drafts.advance !== undefined ? Math.max(0, parseFloat(drafts.advance) || 0) : record.advance;
+    const deductions = drafts.deductions !== undefined ? Math.max(0, parseFloat(drafts.deductions) || 0) : record.deductions;
+
+    const updatedRecord: Salary = {
       ...record,
+      bonus: parseFloat(bonus.toFixed(2)),
+      advance: parseFloat(advance.toFixed(2)),
+      deductions: parseFloat(deductions.toFixed(2)),
+      netSalary: parseFloat((record.baseSalary + bonus - advance - deductions).toFixed(2)),
       status: newStatus
     };
 
-    onUpdateSalary(updatedRecord);
+    try {
+      await onUpdateSalary(updatedRecord);
+      setDraftValues(prev => {
+        const next = { ...prev };
+        delete next[workerId];
+        return next;
+      });
+    } catch (err: any) {
+      setValidationError(err?.message || 'Failed to update salary payment status.');
+    } finally {
+      setTogglingWorkerId(null);
+    }
   };
 
   const handleOpenSlip = (worker: Worker, salaryRecord: Salary) => {
@@ -394,16 +521,29 @@ export default function MonthlySalarySheet({
             onChange={(e) => {
               const val = e.target.value;
               if (!val) {
-                alert("Error: Date cannot be zero! Page is refreshing...");
-                window.location.reload();
+                setValidationError('Payroll month cannot be cleared. Keeping last valid month.');
                 return;
               }
+              setValidationError('');
               setSelectedMonth(val);
             }}
             className="bg-transparent border-none outline-none text-sm font-bold text-slate-800"
           />
         </div>
       </div>
+
+      {/* Inline Validation / Save Error Banner */}
+      {validationError && (
+        <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs font-bold flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+            <span>{validationError}</span>
+          </div>
+          <button type="button" onClick={() => setValidationError('')} className="text-rose-500 hover:text-rose-700 cursor-pointer">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {/* Filter & Export Tools Section */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
@@ -474,10 +614,10 @@ export default function MonthlySalarySheet({
                 value={exportStartDate}
                 onChange={(val) => {
                   if (!val) {
-                    alert("Error: Date cannot be zero! Page is refreshing...");
-                    window.location.reload();
+                    setValidationError('Export Start Date cannot be cleared. Keeping last valid date.');
                     return;
                   }
+                  setValidationError('');
                   setExportStartDate(val);
                 }}
                 className="bg-white"
@@ -490,10 +630,10 @@ export default function MonthlySalarySheet({
                 value={exportEndDate}
                 onChange={(val) => {
                   if (!val) {
-                    alert("Error: Date cannot be zero! Page is refreshing...");
-                    window.location.reload();
+                    setValidationError('Export End Date cannot be cleared. Keeping last valid date.');
                     return;
                   }
+                  setValidationError('');
                   setExportEndDate(val);
                 }}
                 className="bg-white"
@@ -711,9 +851,16 @@ export default function MonthlySalarySheet({
                             step="0.01"
                             min="0"
                             placeholder="0"
-                            value={salaryRecord.bonus || ''}
-                            onChange={(e) => handleUpdateField(worker.workerId, baseSal, 'bonus', e.target.value)}
-                            className="w-full pl-5 pr-1 py-1 bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200 focus:border-slate-400 rounded-lg outline-none text-xs font-mono font-bold text-center text-emerald-600"
+                            disabled={salaryRecord.status === 'Paid'}
+                            title={salaryRecord.status === 'Paid' ? 'Locked while Paid — mark Pending to edit' : 'Enter bonus amount'}
+                            value={draftValues[worker.workerId]?.bonus ?? (salaryRecord.bonus || '')}
+                            onChange={(e) => handleFieldInputChange(worker.workerId, baseSal, 'bonus', e.target.value)}
+                            onBlur={() => handleFieldInputBlur(worker.workerId, baseSal, 'bonus')}
+                            className={`w-full pl-5 pr-1 py-1 border rounded-lg outline-none text-xs font-mono font-bold text-center ${
+                              salaryRecord.status === 'Paid'
+                                ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                                : 'bg-slate-50 hover:bg-slate-100/80 focus:bg-white border-slate-200 focus:border-slate-400 text-emerald-600'
+                            }`}
                           />
                         </div>
                       </td>
@@ -728,9 +875,16 @@ export default function MonthlySalarySheet({
                             step="0.01"
                             min="0"
                             placeholder="0"
-                            value={salaryRecord.advance || ''}
-                            onChange={(e) => handleUpdateField(worker.workerId, baseSal, 'advance', e.target.value)}
-                            className="w-full pl-5 pr-1 py-1 bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200 focus:border-slate-400 rounded-lg outline-none text-xs font-mono font-bold text-center text-red-600"
+                            disabled={salaryRecord.status === 'Paid'}
+                            title={salaryRecord.status === 'Paid' ? 'Locked while Paid — mark Pending to edit' : 'Enter advance amount'}
+                            value={draftValues[worker.workerId]?.advance ?? (salaryRecord.advance || '')}
+                            onChange={(e) => handleFieldInputChange(worker.workerId, baseSal, 'advance', e.target.value)}
+                            onBlur={() => handleFieldInputBlur(worker.workerId, baseSal, 'advance')}
+                            className={`w-full pl-5 pr-1 py-1 border rounded-lg outline-none text-xs font-mono font-bold text-center ${
+                              salaryRecord.status === 'Paid'
+                                ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                                : 'bg-slate-50 hover:bg-slate-100/80 focus:bg-white border-slate-200 focus:border-slate-400 text-red-600'
+                            }`}
                           />
                         </div>
                       </td>
@@ -745,9 +899,16 @@ export default function MonthlySalarySheet({
                             step="0.01"
                             min="0"
                             placeholder="0"
-                            value={salaryRecord.deductions || ''}
-                            onChange={(e) => handleUpdateField(worker.workerId, baseSal, 'deductions', e.target.value)}
-                            className="w-full pl-5 pr-1 py-1 bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200 focus:border-slate-400 rounded-lg outline-none text-xs font-mono font-bold text-center text-red-600"
+                            disabled={salaryRecord.status === 'Paid'}
+                            title={salaryRecord.status === 'Paid' ? 'Locked while Paid — mark Pending to edit' : 'Enter deduction amount'}
+                            value={draftValues[worker.workerId]?.deductions ?? (salaryRecord.deductions || '')}
+                            onChange={(e) => handleFieldInputChange(worker.workerId, baseSal, 'deductions', e.target.value)}
+                            onBlur={() => handleFieldInputBlur(worker.workerId, baseSal, 'deductions')}
+                            className={`w-full pl-5 pr-1 py-1 border rounded-lg outline-none text-xs font-mono font-bold text-center ${
+                              salaryRecord.status === 'Paid'
+                                ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                                : 'bg-slate-50 hover:bg-slate-100/80 focus:bg-white border-slate-200 focus:border-slate-400 text-red-600'
+                            }`}
                           />
                         </div>
                       </td>
@@ -756,8 +917,9 @@ export default function MonthlySalarySheet({
                       <td className="px-3 py-3 text-center">
                         <button
                           id={`status-toggle-btn-${worker.workerId}`}
+                          disabled={togglingWorkerId === worker.workerId}
                           onClick={() => handleToggleStatus(worker.workerId, baseSal)}
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-extrabold border transition-colors cursor-pointer ${
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-extrabold border transition-colors cursor-pointer disabled:opacity-50 ${
                             salaryRecord.status === 'Paid'
                               ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                               : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'

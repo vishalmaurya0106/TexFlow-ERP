@@ -18,8 +18,8 @@ interface LoomDailyWorkProps {
   machines: Machine[];
   companies?: Company[];
   dailyWorks: DailyWork[];
-  onAddDailyWork: (work: DailyWork) => void;
-  onDeleteDailyWork: (workId: string) => void;
+  onAddDailyWork: (work: DailyWork) => Promise<void> | void;
+  onDeleteDailyWork: (workId: string) => Promise<void> | void;
   isAdmin?: boolean;
   isSupervisor1?: boolean;
 }
@@ -84,6 +84,8 @@ export default function LoomDailyWork({
   // Error & Success Feedback State
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Clear feedback messages when operator, date, or shift changes
   useEffect(() => {
@@ -138,8 +140,9 @@ export default function LoomDailyWork({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setErrorMessage('');
     setSuccessMessage('');
 
@@ -166,7 +169,7 @@ export default function LoomDailyWork({
     }
 
     const payload: DailyWork = {
-      workId: `DW-${Date.now()}`,
+      workId: `DW-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       workerId: selectedWorkerId,
       date: selectedDate,
       selectedMachines: [...selectedMachines],
@@ -176,14 +179,20 @@ export default function LoomDailyWork({
       shift: selectedShift
     };
 
-    onAddDailyWork(payload);
-    
-    setSuccessMessage(`Production entry saved successfully for ${currentWorker?.name || selectedWorkerId} (${selectedShift} Shift)!`);
-    setTimeout(() => setSuccessMessage(''), 3000);
+    setIsSubmitting(true);
+    try {
+      await onAddDailyWork(payload);
+      setSuccessMessage(`Production entry saved successfully for ${currentWorker?.name || selectedWorkerId} (${selectedShift} Shift)!`);
+      setTimeout(() => setSuccessMessage(''), 3000);
 
-    // Reset Form selections except worker & date to keep it easy for sequential entry
-    setSelectedMachines([]);
-    setCustomRate(null);
+      // Reset Form selections only after confirmed save
+      setSelectedMachines([]);
+      setCustomRate(null);
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to save production entry. Please verify and try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Filter Date Range State (Default to Today)
@@ -450,10 +459,11 @@ export default function LoomDailyWork({
               <button
                 type="submit"
                 id="submit-prod-entry-btn"
-                className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-6 py-3 rounded-xl shadow-lg hover:shadow-indigo-500/20 hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2 text-sm cursor-pointer"
+                disabled={isSubmitting}
+                className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold px-6 py-3 rounded-xl shadow-lg hover:shadow-indigo-500/20 hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2 text-sm cursor-pointer"
               >
                 <Plus className="h-4.5 w-4.5 stroke-[3]" />
-                Record Production
+                {isSubmitting ? 'Saving Entry...' : 'Record Production'}
               </button>
             </div>
 
@@ -654,16 +664,22 @@ export default function LoomDailyWork({
           isOpen={isConfirmDeleteOpen}
           title="Delete Production Log"
           message={deleteWorkMessage}
-          onConfirm={() => {
-            if (!isAdmin) {
-              setIsConfirmDeleteOpen(false);
+          confirmLabel={isDeleting ? 'Deleting...' : 'Delete'}
+          onConfirm={async () => {
+            if (!isAdmin || isDeleting) {
+              if (!isAdmin) setIsConfirmDeleteOpen(false);
               return;
             }
-            onDeleteDailyWork(deleteWorkId);
-            setIsConfirmDeleteOpen(false);
+            setIsDeleting(true);
+            try {
+              await onDeleteDailyWork(deleteWorkId);
+              setIsConfirmDeleteOpen(false);
+            } finally {
+              setIsDeleting(false);
+            }
           }}
           onCancel={() => {
-            setIsConfirmDeleteOpen(false);
+            if (!isDeleting) setIsConfirmDeleteOpen(false);
           }}
         />
       )}

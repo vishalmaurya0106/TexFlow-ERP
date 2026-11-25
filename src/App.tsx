@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Worker, Machine, DailyWork, AdminAttendance, Attendance, Salary, UserSession, Company 
 } from './types';
@@ -14,7 +14,6 @@ import {
 import DashboardOverview from './components/DashboardOverview';
 import WorkersDirectory from './components/WorkersDirectory';
 import LoomDailyWork from './components/LoomDailyWork';
-import AttendanceRegister from './components/AttendanceRegister';
 import AdminAttendanceRegister from './components/AdminAttendanceRegister';
 import OtherAttendanceRegister from './components/OtherAttendanceRegister';
 import MonthlySalarySheet from './components/MonthlySalarySheet';
@@ -26,11 +25,11 @@ import SettingsPanel from './components/SettingsPanel';
 import LoomReportsRegister from './components/LoomReportsRegister';
 
 import { 
-  Cpu, Users, Cpu as LoomIcon, Clock, Building, FileText, 
-  Settings, Download, Upload, Trash2, ShieldCheck, Factory,
-  Menu, X, Monitor, HelpCircle, Laptop, Chrome, ArrowUpRight,
-  Database, RefreshCw, CheckCircle2, AlertCircle, Copy, Check,
-  LogOut, User, Lock, KeyRound
+  Cpu, Users, Cpu as LoomIcon, Building, FileText, 
+  Settings, ShieldCheck, Factory,
+  Menu, X, Monitor, Laptop, Chrome, ArrowUpRight,
+  Database, RefreshCw, CheckCircle2, AlertCircle,
+  LogOut, User
 } from 'lucide-react';
 import { 
   testFirebaseConnection, 
@@ -38,16 +37,18 @@ import {
   fetchFirebaseAdminAttendances, fetchFirebaseAttendances, fetchFirebaseSalaries, fetchFirebaseCompanies,
   subscribeFirebaseWorkers, subscribeFirebaseMachines, subscribeFirebaseDailyWorks,
   subscribeFirebaseAdminAttendances, subscribeFirebaseAttendances, subscribeFirebaseSalaries, subscribeFirebaseCompanies,
-  createWorker, updateWorker, deleteWorker, batchSaveWorkers,
+  createWorker, updateWorker, deleteWorkerCascade, batchSaveWorkers,
   createMachine, updateMachine, deleteMachine,
-  createDailyWork, updateDailyWork, deleteDailyWork,
-  createAdminAttendance, updateAdminAttendance, deleteAdminAttendance,
-  createAttendance, updateAttendance, deleteAttendance,
-  createSalary, updateSalary, deleteSalary,
-  createCompany, updateCompany, deleteCompany,
+  createDailyWorkAtomic, deleteDailyWork,
+  saveAdminAttendanceAtomic, batchSaveAdminAttendances, deleteAdminAttendance,
+  createAttendance, deleteAttendance,
+  createSalary,
+  createCompany, updateCompanyAtomic, deleteCompany,
+  syncLocalMissingToFirebase,
   reconcileWorkersToFirebase, reconcileMachinesToFirebase, reconcileDailyWorksToFirebase,
   reconcileAdminAttendancesToFirebase, reconcileAttendancesToFirebase, reconcileSalariesToFirebase,
   reconcileCompaniesToFirebase,
+  formatCloudError,
   FIREBASE_PROJECT_ID
 } from './lib/firebase';
 
@@ -56,6 +57,21 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isConfirmResetOpen, setIsConfirmResetOpen] = useState(false);
   const [isConfirmClearDataOpen, setIsConfirmClearDataOpen] = useState(false);
+  const [deleteCompanyConfirm, setDeleteCompanyConfirm] = useState<{ isOpen: boolean; companyId: string; message: string }>({
+    isOpen: false,
+    companyId: '',
+    message: ''
+  });
+  const [toast, setToast] = useState<{ id: number; type: 'success' | 'error' | 'warning'; message: string } | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+
+  const showToast = useCallback((type: 'success' | 'error' | 'warning', message: string) => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    setToast({ id: Date.now(), type, message });
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+    }, 5000);
+  }, []);
 
   // --- Authentication States ---
   const [currentSession, setCurrentSession] = useState<UserSession | null>(() => {
@@ -189,17 +205,26 @@ export default function App() {
       setCloudMsg('Connected & Live Synced with Firebase Firestore');
 
       try {
-        const [fbCompanies, fbWorkers, fbMachines, fbWorks, fbAdminAtt, fbAtt, fbSalaries] = await Promise.all([
-          fetchFirebaseCompanies().catch(() => null),
-          fetchFirebaseWorkers().catch(() => null),
-          fetchFirebaseMachines().catch(() => null),
-          fetchFirebaseDailyWorks().catch(() => null),
-          fetchFirebaseAdminAttendances().catch(() => null),
-          fetchFirebaseAttendances().catch(() => null),
-          fetchFirebaseSalaries().catch(() => null)
+        const fetchResults = await Promise.all([
+          fetchFirebaseCompanies().then(v => ({ ok: true as const, data: v })).catch(() => ({ ok: false as const, data: null })),
+          fetchFirebaseWorkers().then(v => ({ ok: true as const, data: v })).catch(() => ({ ok: false as const, data: null })),
+          fetchFirebaseMachines().then(v => ({ ok: true as const, data: v })).catch(() => ({ ok: false as const, data: null })),
+          fetchFirebaseDailyWorks().then(v => ({ ok: true as const, data: v })).catch(() => ({ ok: false as const, data: null })),
+          fetchFirebaseAdminAttendances().then(v => ({ ok: true as const, data: v })).catch(() => ({ ok: false as const, data: null })),
+          fetchFirebaseAttendances().then(v => ({ ok: true as const, data: v })).catch(() => ({ ok: false as const, data: null })),
+          fetchFirebaseSalaries().then(v => ({ ok: true as const, data: v })).catch(() => ({ ok: false as const, data: null }))
         ]);
 
-        // 1. SAFE MERGE COMPANIES: Never overwrite with empty if local has data
+        const [resComp, resWorkers, resMachines, resWorks, resAdminAtt, resAtt, resSal] = fetchResults;
+        const fbCompanies = resComp.data;
+        const fbWorkers = resWorkers.data;
+        const fbMachines = resMachines.data;
+        const fbWorks = resWorks.data;
+        const fbAdminAtt = resAdminAtt.data;
+        const fbAtt = resAtt.data;
+        const fbSalaries = resSal.data;
+
+        // 1. SAFE MERGE COMPANIES
         const localCompanies = getLocalData<Company[]>('texflow_companies', DEFAULT_COMPANIES);
         const compMap = new Map<string, Company>();
         localCompanies.forEach(c => compMap.set(c.companyId, c));
@@ -208,23 +233,22 @@ export default function App() {
         setCompanies(mergedCompanies);
         try { localStorage.setItem('texflow_companies', JSON.stringify(mergedCompanies)); } catch {}
 
-        // 2. SAFE MERGE WORKERS: Absolute Zero Data Loss Rule
+        // 2. SAFE MERGE WORKERS
         const localWorkers = getLocalData<Worker[]>('texflow_workers', []);
         const workerMap = new Map<string, Worker>();
-        // First put any local workers (preserves workers imported via Excel even before network roundtrip)
         localWorkers.forEach(w => workerMap.set(w.workerId.toLowerCase(), w));
-        // Overlay Firestore workers (authoritative cloud records)
         (fbWorkers || []).forEach(w => workerMap.set(w.workerId.toLowerCase(), w));
         const mergedWorkers = Array.from(workerMap.values());
         setWorkers(mergedWorkers);
         try { localStorage.setItem('texflow_workers', JSON.stringify(mergedWorkers)); } catch {}
 
-        // Background push any local-only workers up to Firebase
-        const unsyncedWorkers = localWorkers.filter(lw => 
-          !(fbWorkers || []).some(fw => fw.workerId.toLowerCase() === lw.workerId.toLowerCase())
-        );
-        if (unsyncedWorkers.length > 0) {
-          batchSaveWorkers(unsyncedWorkers).catch(err => console.warn('Background sync for unsynced workers:', err));
+        if (resWorkers.ok) {
+          const unsyncedWorkers = localWorkers.filter(lw =>
+            !(fbWorkers || []).some(fw => fw.workerId.toLowerCase() === lw.workerId.toLowerCase())
+          );
+          if (unsyncedWorkers.length > 0) {
+            batchSaveWorkers(unsyncedWorkers).catch(err => console.warn('Background sync for unsynced workers:', err));
+          }
         }
 
         // 3. SAFE MERGE MACHINES
@@ -272,124 +296,132 @@ export default function App() {
         setSalaries(mergedSalaries);
         try { localStorage.setItem('texflow_salaries', JSON.stringify(mergedSalaries)); } catch {}
 
-        // If Firebase had no data at all (first time deployment), initialize it with current merged state
-        const totalCloudCount = (fbCompanies?.length || 0) + (fbWorkers?.length || 0) + (fbMachines?.length || 0) + 
-                               (fbWorks?.length || 0) + (fbAdminAtt?.length || 0) + 
+        // Only push initial seed state if ALL fetches succeeded AND remote DB is genuinely empty
+        const allFetchesOk = fetchResults.every(r => r.ok);
+        const totalCloudCount = (fbCompanies?.length || 0) + (fbWorkers?.length || 0) + (fbMachines?.length || 0) +
+                               (fbWorks?.length || 0) + (fbAdminAtt?.length || 0) +
                                (fbAtt?.length || 0) + (fbSalaries?.length || 0);
 
-        if (totalCloudCount === 0 && (mergedCompanies.length > 0 || mergedWorkers.length > 0)) {
-          await Promise.all([
-            reconcileCompaniesToFirebase(mergedCompanies).catch(() => {}),
-            reconcileWorkersToFirebase(mergedWorkers).catch(() => {}),
-            reconcileMachinesToFirebase(mergedMachines).catch(() => {}),
-            reconcileDailyWorksToFirebase(mergedWorks).catch(() => {}),
-            reconcileAdminAttendancesToFirebase(mergedAdminAtt).catch(() => {}),
-            reconcileAttendancesToFirebase(mergedAtt).catch(() => {}),
-            reconcileSalariesToFirebase(mergedSalaries).catch(() => {})
-          ]);
+        if (allFetchesOk && totalCloudCount === 0 && (mergedCompanies.length > 0 || mergedWorkers.length > 0)) {
+          await syncLocalMissingToFirebase({
+            companies: mergedCompanies,
+            workers: mergedWorkers,
+            machines: mergedMachines,
+            dailyWorks: mergedWorks,
+            adminAttendances: mergedAdminAtt,
+            attendances: mergedAtt,
+            salaries: mergedSalaries
+          }).catch(err => console.warn('Initial additive seed sync notice:', err));
         }
 
         // ==========================================
         // REAL-TIME FIRESTORE SUBSCRIPTIONS (LIVE MULTI-VIEW & MOBILE SYNC)
         // ==========================================
-        // Updates state immediately without needing page refresh across Admin, Supervisors, and Mobile views
+        const handleSubError = (err: Error) => {
+          setCloudStatus('error');
+          setCloudMsg(`Live sync warning: ${err.message}`);
+        };
+
         const unsubComp = subscribeFirebaseCompanies((liveComp) => {
-          if (liveComp && liveComp.length > 0) {
-            setCompanies(liveComp);
-            try { localStorage.setItem('texflow_companies', JSON.stringify(liveComp)); } catch {}
-          }
-        });
+          setCompanies(liveComp);
+          try { localStorage.setItem('texflow_companies', JSON.stringify(liveComp)); } catch {}
+        }, handleSubError);
 
         const unsubW = subscribeFirebaseWorkers((liveWorkers) => {
           setWorkers(liveWorkers);
           try { localStorage.setItem('texflow_workers', JSON.stringify(liveWorkers)); } catch {}
-        });
+        }, handleSubError);
 
         const unsubM = subscribeFirebaseMachines((liveMachines) => {
-          if (liveMachines && liveMachines.length > 0) {
-            setMachines(liveMachines);
-            try { localStorage.setItem('texflow_machines', JSON.stringify(liveMachines)); } catch {}
-          }
-        });
+          setMachines(liveMachines);
+          try { localStorage.setItem('texflow_machines', JSON.stringify(liveMachines)); } catch {}
+        }, handleSubError);
 
         const unsubDW = subscribeFirebaseDailyWorks((liveWorks) => {
           setDailyWorks(liveWorks);
           try { localStorage.setItem('texflow_dailyWorks', JSON.stringify(liveWorks)); } catch {}
-        });
+        }, handleSubError);
 
         const unsubAA = subscribeFirebaseAdminAttendances((liveAdminAtt) => {
           setAdminAttendances(liveAdminAtt);
           try { localStorage.setItem('texflow_adminAttendances', JSON.stringify(liveAdminAtt)); } catch {}
-        });
+        }, handleSubError);
 
         const unsubA = subscribeFirebaseAttendances((liveAtt) => {
           setAttendances(liveAtt);
           try { localStorage.setItem('texflow_attendances', JSON.stringify(liveAtt)); } catch {}
-        });
+        }, handleSubError);
 
         const unsubS = subscribeFirebaseSalaries((liveSal) => {
           setSalaries(liveSal);
           try { localStorage.setItem('texflow_salaries', JSON.stringify(liveSal)); } catch {}
-        });
+        }, handleSubError);
 
         unsubs.push(unsubComp, unsubW, unsubM, unsubDW, unsubAA, unsubA, unsubS);
 
       } catch (err: any) {
         setCloudStatus('error');
-        setCloudMsg(`Firebase sync notice: ${err?.message || err}. Running on local storage.`);
+        setCloudMsg(`Firebase sync notice: ${formatCloudError(err)}. Running on local storage.`);
       }
     }
 
     initData();
 
-    // Cross-tab / Window instantaneous sync listener
-    const handleStorageChange = (e: StorageEvent) => {
-      if (!e.key || !e.newValue) return;
-      try {
-        if (e.key === 'texflow_workers') setWorkers(JSON.parse(e.newValue));
-        if (e.key === 'texflow_dailyWorks') setDailyWorks(JSON.parse(e.newValue));
-        if (e.key === 'texflow_adminAttendances') setAdminAttendances(JSON.parse(e.newValue));
-        if (e.key === 'texflow_attendances') setAttendances(JSON.parse(e.newValue));
-        if (e.key === 'texflow_machines') setMachines(JSON.parse(e.newValue));
-        if (e.key === 'texflow_companies') setCompanies(JSON.parse(e.newValue));
-        if (e.key === 'texflow_salaries') setSalaries(JSON.parse(e.newValue));
-      } catch {}
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-
     return () => {
       unsubs.forEach(fn => {
         try { fn(); } catch {}
       });
-      window.removeEventListener('storage', handleStorageChange);
     };
   }, []);
 
   const handleManualSyncAll = async () => {
     setIsSyncing(true);
     try {
-      await Promise.all([
-        reconcileCompaniesToFirebase(companies),
-        reconcileWorkersToFirebase(workers),
-        reconcileMachinesToFirebase(machines),
-        reconcileDailyWorksToFirebase(dailyWorks),
-        reconcileAdminAttendancesToFirebase(adminAttendances),
-        reconcileAttendancesToFirebase(attendances),
-        reconcileSalariesToFirebase(salaries)
+      // Safe non-destructive additive sync: pushes any unsynced local records
+      // without ever deleting remote records created by other users/devices.
+      await syncLocalMissingToFirebase({
+        companies,
+        workers,
+        machines,
+        dailyWorks,
+        adminAttendances,
+        attendances,
+        salaries
+      });
+
+      const [liveComp, liveWorkers, liveMachines, liveWorks, liveAdminAtt, liveAtt, liveSal] = await Promise.all([
+        fetchFirebaseCompanies(),
+        fetchFirebaseWorkers(),
+        fetchFirebaseMachines(),
+        fetchFirebaseDailyWorks(),
+        fetchFirebaseAdminAttendances(),
+        fetchFirebaseAttendances(),
+        fetchFirebaseSalaries()
       ]);
+
+      setCompanies(liveComp);
+      setWorkers(liveWorkers);
+      setMachines(liveMachines);
+      setDailyWorks(liveWorks);
+      setAdminAttendances(liveAdminAtt);
+      setAttendances(liveAtt);
+      setSalaries(liveSal);
+
       const conn = await testFirebaseConnection();
       if (conn.success) {
         setCloudStatus('connected');
-        setCloudMsg('Data reconciled and synced with Firebase Firestore successfully!');
+        setCloudMsg('Data safely synced with Firebase Firestore (zero remote overwrites).');
+        showToast('success', 'Cloud data synchronized safely across all collections.');
       } else {
         setCloudStatus('error');
         setCloudMsg(conn.message);
+        showToast('warning', conn.message);
       }
     } catch (err: any) {
+      const msg = formatCloudError(err);
       setCloudStatus('error');
-      setCloudMsg(`Sync Error: ${err?.message || err}`);
-      alert(`Firebase Sync Error: ${err?.message || err}`);
+      setCloudMsg(`Sync Error: ${msg}`);
+      showToast('error', `Firebase Sync Error: ${msg}`);
     } finally {
       setIsSyncing(false);
     }
@@ -397,28 +429,23 @@ export default function App() {
 
   // --- Batch Import Workers Handler (Zero Data Loss for Excel Uploads) ---
   const handleBatchImportWorkers = async (importedWorkers: Worker[]) => {
-    // 1. Immediately update state and localStorage synchronously
-    setWorkers(prev => {
-      const workerMap = new Map<string, Worker>();
-      prev.forEach(w => workerMap.set(w.workerId.toLowerCase(), w));
-      importedWorkers.forEach(w => workerMap.set(w.workerId.toLowerCase(), w));
-      const merged = Array.from(workerMap.values());
-      try {
-        localStorage.setItem('texflow_workers', JSON.stringify(merged));
-      } catch (e) {
-        console.warn('LocalStorage save notice:', e);
-      }
-      return merged;
-    });
-
-    // 2. Persist to Firebase Firestore
     try {
       await batchSaveWorkers(importedWorkers);
+      setWorkers(prev => {
+        const workerMap = new Map<string, Worker>();
+        prev.forEach(w => workerMap.set(w.workerId.toLowerCase(), w));
+        importedWorkers.forEach(w => workerMap.set(w.workerId.toLowerCase(), w));
+        const merged = Array.from(workerMap.values());
+        try { localStorage.setItem('texflow_workers', JSON.stringify(merged)); } catch {}
+        return merged;
+      });
       setCloudStatus('connected');
       setCloudMsg(`All ${importedWorkers.length} employee records saved live to Firebase Firestore!`);
+      showToast('success', `Imported ${importedWorkers.length} employee records to Firebase.`);
     } catch (err: any) {
-      console.warn('Batch saved locally, Firebase sync warning:', err?.message || err);
-      setCloudMsg(`Saved locally (${err?.message || 'Sync queued'})`);
+      const msg = formatCloudError(err);
+      showToast('error', `Failed to import employees: ${msg}`);
+      throw new Error(msg);
     }
   };
 
@@ -426,13 +453,16 @@ export default function App() {
   const handleAddCompany = async (name: string) => {
     const newCompany: Company = {
       companyId: `COMP-${Date.now()}`,
-      name
+      name: name.trim()
     };
-    setCompanies(prev => [...prev, newCompany]);
     try {
       await createCompany(newCompany);
+      setCompanies(prev => prev.some(c => c.companyId === newCompany.companyId) ? prev : [...prev, newCompany]);
+      showToast('success', `Company "${newCompany.name}" created.`);
     } catch (err: any) {
-      console.warn('Saved company locally, Firebase sync pending:', err?.message || err);
+      const msg = formatCloudError(err);
+      showToast('error', `Failed to add company: ${msg}`);
+      throw new Error(msg);
     }
   };
 
@@ -440,25 +470,20 @@ export default function App() {
     const oldComp = companies.find(c => c.companyId === companyId);
     if (!oldComp) return;
     const oldName = oldComp.name;
-
-    setCompanies(prev => prev.map(c => c.companyId === companyId ? { ...c, name: newName } : c));
-
-    // Also update workers associated with this company name
-    if (oldName !== newName) {
-      setWorkers(prev => prev.map(w => {
-        if (w.companyName === oldName) {
-          const updated = { ...w, companyName: newName };
-          updateWorker(updated).catch(() => {});
-          return updated;
-        }
-        return w;
-      }));
-    }
+    const cleanNewName = newName.trim();
 
     try {
-      await updateCompany(companyId, newName);
+      await updateCompanyAtomic(companyId, oldName, cleanNewName);
+      setCompanies(prev => prev.map(c => c.companyId === companyId ? { ...c, name: cleanNewName } : c));
+      if (oldName !== cleanNewName) {
+        setWorkers(prev => prev.map(w => w.companyName === oldName ? { ...w, companyName: cleanNewName } : w));
+        setMachines(prev => prev.map(m => m.companyName === oldName ? { ...m, companyName: cleanNewName } : m));
+      }
+      showToast('success', `Company updated to "${cleanNewName}".`);
     } catch (err: any) {
-      console.warn('Updated company locally, Firebase sync pending:', err?.message || err);
+      const msg = formatCloudError(err);
+      showToast('error', `Failed to update company: ${msg}`);
+      throw new Error(msg);
     }
   };
 
@@ -466,82 +491,83 @@ export default function App() {
     const comp = companies.find(c => c.companyId === companyId);
     if (!comp) return;
 
-    const associatedCount = workers.filter(w => w.companyName === comp.name).length;
-    if (associatedCount > 0) {
-      if (!window.confirm(`Warning: ${associatedCount} employees are registered under "${comp.name}". Are you sure you want to delete this company?`)) {
-        return;
-      }
-    }
+    const associatedWorkers = workers.filter(w => w.companyName === comp.name).length;
+    const associatedMachines = machines.filter(m => m.companyName === comp.name).length;
+    const msg = (associatedWorkers > 0 || associatedMachines > 0)
+      ? `Warning: ${associatedWorkers} employees and ${associatedMachines} machines are registered under "${comp.name}". Deleting this company will NOT delete those workers/machines, but they will keep the old company label. Continue?`
+      : `Are you sure you want to delete company "${comp.name}"?`;
 
-    setCompanies(prev => prev.filter(c => c.companyId !== companyId));
+    setDeleteCompanyConfirm({
+      isOpen: true,
+      companyId,
+      message: msg
+    });
+  };
+
+  const executeDeleteCompany = async () => {
+    const companyId = deleteCompanyConfirm.companyId;
+    setDeleteCompanyConfirm({ isOpen: false, companyId: '', message: '' });
+    if (!companyId) return;
     try {
       await deleteCompany(companyId);
+      setCompanies(prev => prev.filter(c => c.companyId !== companyId));
+      showToast('success', 'Company deleted.');
     } catch (err: any) {
-      console.warn('Deleted company locally, Firebase sync pending:', err?.message || err);
+      showToast('error', `Failed to delete company: ${formatCloudError(err)}`);
     }
   };
 
   // --- Worker Operations ---
   const handleAddWorker = async (newWorker: Worker) => {
-    setWorkers(prev => {
-      const exists = prev.some(w => w.workerId.toLowerCase() === newWorker.workerId.toLowerCase());
-      const updated = exists 
-        ? prev.map(w => w.workerId.toLowerCase() === newWorker.workerId.toLowerCase() ? newWorker : w)
-        : [...prev, newWorker];
-      try { localStorage.setItem('texflow_workers', JSON.stringify(updated)); } catch {}
-      return updated;
-    });
     try {
       await createWorker(newWorker);
+      setWorkers(prev => {
+        const exists = prev.some(w => w.workerId.toLowerCase() === newWorker.workerId.toLowerCase());
+        const updated = exists
+          ? prev.map(w => w.workerId.toLowerCase() === newWorker.workerId.toLowerCase() ? newWorker : w)
+          : [...prev, newWorker];
+        try { localStorage.setItem('texflow_workers', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+      showToast('success', `Employee ${newWorker.workerId} - ${newWorker.name} saved.`);
     } catch (err: any) {
-      console.warn('Saved locally, Firebase sync pending:', err?.message || err);
+      const msg = formatCloudError(err);
+      showToast('error', `Failed to save employee: ${msg}`);
+      throw new Error(msg);
     }
   };
 
   const handleUpdateWorker = async (updatedWorker: Worker) => {
-    setWorkers(prev => {
-      const updated = prev.map(w => w.workerId.toLowerCase() === updatedWorker.workerId.toLowerCase() ? updatedWorker : w);
-      try { localStorage.setItem('texflow_workers', JSON.stringify(updated)); } catch {}
-      return updated;
-    });
     try {
       await updateWorker(updatedWorker);
+      setWorkers(prev => {
+        const updated = prev.map(w => w.workerId.toLowerCase() === updatedWorker.workerId.toLowerCase() ? updatedWorker : w);
+        try { localStorage.setItem('texflow_workers', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+      showToast('success', `Updated ${updatedWorker.workerId} - ${updatedWorker.name}.`);
     } catch (err: any) {
-      console.warn('Updated locally, Firebase sync pending:', err?.message || err);
+      const msg = formatCloudError(err);
+      showToast('error', `Failed to update employee: ${msg}`);
+      throw new Error(msg);
     }
   };
 
   const handleDeleteWorker = async (workerId: string) => {
-    setWorkers(prev => {
-      const updated = prev.filter(w => w.workerId !== workerId);
-      try { localStorage.setItem('texflow_workers', JSON.stringify(updated)); } catch {}
-      return updated;
-    });
-    setDailyWorks(prev => prev.filter(dw => dw.workerId !== workerId));
-    setAdminAttendances(prev => prev.filter(aa => aa.workerId !== workerId));
-    setAttendances(prev => prev.filter(a => a.workerId !== workerId));
-    setSalaries(prev => prev.filter(s => s.workerId !== workerId));
-
     try {
-      await deleteWorker(workerId);
-      const worksToDelete = dailyWorks.filter(dw => dw.workerId === workerId);
-      for (const dw of worksToDelete) {
-        await deleteDailyWork(dw.workId).catch(() => {});
-      }
-      const adminAttToDelete = adminAttendances.filter(aa => aa.workerId === workerId);
-      for (const aa of adminAttToDelete) {
-        await deleteAdminAttendance(aa.adminAttendanceId).catch(() => {});
-      }
-      const attToDelete = attendances.filter(a => a.workerId === workerId);
-      for (const a of attToDelete) {
-        await deleteAttendance(a.attendanceId).catch(() => {});
-      }
-      const salariesToDelete = salaries.filter(s => s.workerId === workerId);
-      for (const s of salariesToDelete) {
-        await deleteSalary(s.salaryId).catch(() => {});
-      }
+      await deleteWorkerCascade(workerId);
+      setWorkers(prev => {
+        const updated = prev.filter(w => w.workerId !== workerId);
+        try { localStorage.setItem('texflow_workers', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+      setDailyWorks(prev => prev.filter(dw => dw.workerId !== workerId));
+      setAdminAttendances(prev => prev.filter(aa => aa.workerId !== workerId));
+      setAttendances(prev => prev.filter(a => a.workerId !== workerId));
+      setSalaries(prev => prev.filter(s => s.workerId !== workerId));
+      showToast('success', `Deleted employee ${workerId} and related records atomically.`);
     } catch (err: any) {
-      console.warn('Deleted locally, Firebase sync pending:', err?.message || err);
+      showToast('error', `Failed to delete employee: ${formatCloudError(err)}`);
     }
   };
 
@@ -550,148 +576,171 @@ export default function App() {
     const target = machines.find(m => m.machineId === machineId);
     if (!target) return;
     const updated = { ...target, isActive: !target.isActive };
-    setMachines(prev => prev.map(m => m.machineId === machineId ? updated : m));
     try {
       await updateMachine(updated);
+      setMachines(prev => prev.map(m => m.machineId === machineId ? updated : m));
     } catch (err: any) {
-      console.warn('Updated machine locally, Firebase sync pending:', err?.message || err);
+      showToast('error', `Failed to update machine status: ${formatCloudError(err)}`);
     }
   };
 
   const handleUpdateMachine = async (updatedMachine: Machine) => {
-    setMachines(prev => prev.map(m => m.machineId === updatedMachine.machineId ? updatedMachine : m));
     try {
       await updateMachine(updatedMachine);
+      setMachines(prev => prev.map(m => m.machineId === updatedMachine.machineId ? updatedMachine : m));
+      showToast('success', `Machine ${updatedMachine.machineId} updated.`);
     } catch (err: any) {
-      console.warn('Updated machine locally, Firebase sync pending:', err?.message || err);
+      const msg = formatCloudError(err);
+      showToast('error', `Failed to update machine: ${msg}`);
+      throw new Error(msg);
     }
   };
 
   const handleAddMachine = async (newMachine: Machine) => {
-    setMachines(prev => [...prev, newMachine]);
     try {
       await createMachine(newMachine);
+      setMachines(prev => prev.some(m => m.machineId.toLowerCase() === newMachine.machineId.toLowerCase()) ? prev : [...prev, newMachine]);
+      showToast('success', `Machine ${newMachine.machineId} added.`);
     } catch (err: any) {
-      console.warn('Added machine locally, Firebase sync pending:', err?.message || err);
+      const msg = formatCloudError(err);
+      showToast('error', `Failed to add machine: ${msg}`);
+      throw new Error(msg);
     }
   };
 
   const handleDeleteMachine = async (machineId: string) => {
-    setMachines(prev => prev.filter(m => m.machineId !== machineId));
     try {
       await deleteMachine(machineId);
+      setMachines(prev => prev.filter(m => m.machineId !== machineId));
+      showToast('success', `Machine ${machineId} deleted.`);
     } catch (err: any) {
-      console.warn('Deleted machine locally, Firebase sync pending:', err?.message || err);
+      showToast('error', `Failed to delete machine: ${formatCloudError(err)}`);
     }
   };
 
-  // --- Daily Work Operations ---
+  // --- Daily Work Operations (Transactional Conflict Guard) ---
   const handleAddDailyWork = async (newWork: DailyWork) => {
-    setDailyWorks(prev => [...prev, newWork]);
     try {
-      await createDailyWork(newWork);
+      const saved = await createDailyWorkAtomic(newWork);
+      setDailyWorks(prev => prev.some(dw => dw.workId === saved.workId) ? prev : [...prev, saved]);
     } catch (err: any) {
-      console.warn('Saved daily work locally, Firebase sync pending:', err?.message || err);
+      const msg = formatCloudError(err);
+      showToast('error', msg);
+      throw new Error(msg);
     }
   };
 
   const handleDeleteDailyWork = async (workId: string) => {
-    setDailyWorks(prev => prev.filter(dw => dw.workId !== workId));
     try {
       await deleteDailyWork(workId);
+      setDailyWorks(prev => prev.filter(dw => dw.workId !== workId));
+      showToast('success', 'Production log deleted.');
     } catch (err: any) {
-      console.warn('Deleted daily work locally, Firebase sync pending:', err?.message || err);
+      showToast('error', `Failed to delete production log: ${formatCloudError(err)}`);
     }
   };
 
-  // --- Admin Attendance Operations ---
+  // --- Admin & Other Attendance Operations (Deterministic + Batch) ---
   const handleAddAdminAttendance = async (newAtt: AdminAttendance) => {
-    const exists = adminAttendances.some(a => a.adminAttendanceId === newAtt.adminAttendanceId);
-    if (exists) {
-      setAdminAttendances(prev => prev.map(a => a.adminAttendanceId === newAtt.adminAttendanceId ? newAtt : a));
-    } else {
-      setAdminAttendances(prev => [...prev, newAtt]);
-    }
     try {
-      if (exists) {
-        await updateAdminAttendance(newAtt);
-      } else {
-        await createAdminAttendance(newAtt);
-      }
+      const saved = await saveAdminAttendanceAtomic(newAtt);
+      setAdminAttendances(prev => {
+        const exists = prev.some(a => a.adminAttendanceId === saved.adminAttendanceId);
+        return exists
+          ? prev.map(a => a.adminAttendanceId === saved.adminAttendanceId ? saved : a)
+          : [...prev, saved];
+      });
     } catch (err: any) {
-      console.warn('Saved admin attendance locally, Firebase sync pending:', err?.message || err);
+      const msg = formatCloudError(err);
+      showToast('error', `Failed to save attendance: ${msg}`);
+      throw new Error(msg);
+    }
+  };
+
+  const handleBatchAdminAttendance = async (records: AdminAttendance[]) => {
+    try {
+      const savedList = await batchSaveAdminAttendances(records);
+      setAdminAttendances(prev => {
+        const map = new Map<string, AdminAttendance>();
+        prev.forEach(a => map.set(a.adminAttendanceId, a));
+        savedList.forEach(a => map.set(a.adminAttendanceId, a));
+        return Array.from(map.values());
+      });
+    } catch (err: any) {
+      const msg = formatCloudError(err);
+      showToast('error', `Failed to save bulk attendance: ${msg}`);
+      throw new Error(msg);
     }
   };
 
   const handleDeleteAdminAttendance = async (id: string) => {
-    setAdminAttendances(prev => prev.filter(a => a.adminAttendanceId !== id));
     try {
       await deleteAdminAttendance(id);
+      setAdminAttendances(prev => prev.filter(a => a.adminAttendanceId !== id));
+      showToast('success', 'Attendance log deleted.');
     } catch (err: any) {
-      console.warn('Deleted admin attendance locally, Firebase sync pending:', err?.message || err);
+      showToast('error', `Failed to delete attendance log: ${formatCloudError(err)}`);
     }
   };
 
   // --- Loom Attendance Operations ---
   const handleAddAttendance = async (newAtt: Attendance) => {
-    const exists = attendances.some(a => a.attendanceId === newAtt.attendanceId);
-    if (exists) {
-      setAttendances(prev => prev.map(a => a.attendanceId === newAtt.attendanceId ? newAtt : a));
-    } else {
-      setAttendances(prev => [...prev, newAtt]);
-    }
     try {
-      if (exists) {
-        await updateAttendance(newAtt);
-      } else {
-        await createAttendance(newAtt);
-      }
+      await createAttendance(newAtt);
+      setAttendances(prev => {
+        const exists = prev.some(a => a.attendanceId === newAtt.attendanceId);
+        return exists
+          ? prev.map(a => a.attendanceId === newAtt.attendanceId ? newAtt : a)
+          : [...prev, newAtt];
+      });
     } catch (err: any) {
-      console.warn('Saved loom attendance locally, Firebase sync pending:', err?.message || err);
+      const msg = formatCloudError(err);
+      showToast('error', `Failed to save attendance: ${msg}`);
+      throw new Error(msg);
     }
   };
 
   const handleDeleteAttendance = async (id: string) => {
-    setAttendances(prev => prev.filter(a => a.attendanceId !== id));
     try {
       await deleteAttendance(id);
+      setAttendances(prev => prev.filter(a => a.attendanceId !== id));
+      showToast('success', 'Attendance deleted.');
     } catch (err: any) {
-      console.warn('Deleted loom attendance locally, Firebase sync pending:', err?.message || err);
+      showToast('error', `Failed to delete attendance: ${formatCloudError(err)}`);
     }
   };
 
-  // --- Salary Operations ---
+  // --- Salary Operations (Transactional Update) ---
   const handleUpdateSalary = async (updatedSalary: Salary) => {
-    const exists = salaries.some(s => s.salaryId === updatedSalary.salaryId);
-    if (exists) {
-      setSalaries(prev => prev.map(s => s.salaryId === updatedSalary.salaryId ? updatedSalary : s));
-    } else {
-      setSalaries(prev => [...prev, updatedSalary]);
-    }
     try {
-      if (exists) {
-        await updateSalary(updatedSalary);
-      } else {
-        await createSalary(updatedSalary);
-      }
+      await createSalary(updatedSalary);
+      setSalaries(prev => {
+        const exists = prev.some(s => s.salaryId === updatedSalary.salaryId);
+        return exists
+          ? prev.map(s => s.salaryId === updatedSalary.salaryId ? updatedSalary : s)
+          : [...prev, updatedSalary];
+      });
     } catch (err: any) {
-      console.warn('Saved salary locally, Firebase sync pending:', err?.message || err);
+      const msg = formatCloudError(err);
+      showToast('error', `Salary update failed: ${msg}`);
+      throw new Error(msg);
     }
   };
 
   // --- Backup and Reset Operations ---
   const handleExportBackup = () => {
     const data = {
+      companies,
       workers,
       machines,
       dailyWorks,
       adminAttendances,
       attendances,
       salaries,
-      exportVersion: "1.0",
+      exportVersion: '2.0',
       exportTime: new Date().toISOString()
     };
-    
+
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -701,6 +750,7 @@ export default function App() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+    showToast('success', 'Complete JSON backup (including companies) exported.');
   };
 
   const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -711,16 +761,27 @@ export default function App() {
     reader.onload = async (event) => {
       try {
         const imported = JSON.parse(event.target?.result as string);
-        if (imported.workers || imported.machines || imported.dailyWorks || imported.salaries) {
+        if (imported && (Array.isArray(imported.workers) || Array.isArray(imported.machines) || Array.isArray(imported.dailyWorks) || Array.isArray(imported.salaries))) {
           setIsSyncing(true);
-          const impWorkers = imported.workers || [];
-          const impMachines = imported.machines || [];
-          const impDailyWorks = imported.dailyWorks || [];
-          const impAdminAtt = imported.adminAttendances || [];
-          const impAtt = imported.attendances || [];
-          const impSalaries = imported.salaries || [];
+          const impCompanies = Array.isArray(imported.companies) ? imported.companies : companies;
+          const impWorkers = Array.isArray(imported.workers) ? imported.workers : [];
+          const impMachines = Array.isArray(imported.machines) ? imported.machines : [];
+          const impDailyWorks = Array.isArray(imported.dailyWorks) ? imported.dailyWorks : [];
+          const impAdminAtt = Array.isArray(imported.adminAttendances) ? imported.adminAttendances : [];
+          const impAtt = Array.isArray(imported.attendances) ? imported.attendances : [];
+          const impSalaries = Array.isArray(imported.salaries) ? imported.salaries : [];
 
-          // 1. Instantly update local state & localStorage
+          await Promise.all([
+            reconcileCompaniesToFirebase(impCompanies),
+            reconcileWorkersToFirebase(impWorkers),
+            reconcileMachinesToFirebase(impMachines),
+            reconcileDailyWorksToFirebase(impDailyWorks),
+            reconcileAdminAttendancesToFirebase(impAdminAtt),
+            reconcileAttendancesToFirebase(impAtt),
+            reconcileSalariesToFirebase(impSalaries)
+          ]);
+
+          setCompanies(impCompanies);
           setWorkers(impWorkers);
           setMachines(impMachines);
           setDailyWorks(impDailyWorks);
@@ -728,28 +789,15 @@ export default function App() {
           setAttendances(impAtt);
           setSalaries(impSalaries);
 
-          // 2. Reconcile to Firebase Firestore
-          try {
-            await Promise.all([
-              reconcileWorkersToFirebase(impWorkers),
-              reconcileMachinesToFirebase(impMachines),
-              reconcileDailyWorksToFirebase(impDailyWorks),
-              reconcileAdminAttendancesToFirebase(impAdminAtt),
-              reconcileAttendancesToFirebase(impAtt),
-              reconcileSalariesToFirebase(impSalaries)
-            ]);
-            alert('Database restored successfully and synced with Firebase Firestore!');
-          } catch (spErr: any) {
-            console.warn('Backup restored locally, Firebase sync failed:', spErr);
-            alert(`Data restored locally on this device! (Firebase Cloud Sync Notice: ${spErr?.message || spErr})`);
-          }
+          showToast('success', 'Database restored successfully and synced with Firebase Firestore.');
         } else {
-          alert('Invalid backup file format. Core fields missing.');
+          showToast('error', 'Invalid backup file format. Core fields missing.');
         }
       } catch (err: any) {
-        alert('Error restoring backup file: ' + (err?.message || err));
+        showToast('error', 'Error restoring backup file: ' + formatCloudError(err));
       } finally {
         setIsSyncing(false);
+        e.target.value = '';
       }
     };
     reader.readAsText(file);
@@ -762,7 +810,10 @@ export default function App() {
   const executeResetToSeed = async () => {
     setIsSyncing(true);
     try {
+      // Download safety backup automatically before destructive seed reset
+      handleExportBackup();
       await Promise.all([
+        reconcileCompaniesToFirebase(DEFAULT_COMPANIES),
         reconcileWorkersToFirebase(SEED_WORKERS),
         reconcileMachinesToFirebase(DEFAULT_MACHINES),
         reconcileDailyWorksToFirebase(SEED_DAILY_WORK),
@@ -771,6 +822,7 @@ export default function App() {
         reconcileSalariesToFirebase(SEED_SALARIES)
       ]);
 
+      setCompanies(DEFAULT_COMPANIES);
       setWorkers(SEED_WORKERS);
       setMachines(DEFAULT_MACHINES);
       setDailyWorks(SEED_DAILY_WORK);
@@ -778,9 +830,9 @@ export default function App() {
       setAttendances(SEED_LOOM_ATTENDANCE);
       setSalaries(SEED_SALARIES);
 
-      alert('Database successfully reset to seed data in Firebase Firestore!');
+      showToast('success', 'Database reset to demo dataset (safety backup downloaded).');
     } catch (err: any) {
-      alert('Error resetting database in Firebase: ' + (err?.message || err));
+      showToast('error', 'Error resetting database: ' + formatCloudError(err));
     } finally {
       setIsSyncing(false);
       setIsConfirmResetOpen(false);
@@ -790,6 +842,8 @@ export default function App() {
   const executeClearAllData = async () => {
     setIsSyncing(true);
     try {
+      // Download safety backup automatically before destructive clear
+      handleExportBackup();
       await Promise.all([
         reconcileWorkersToFirebase([]),
         reconcileMachinesToFirebase(DEFAULT_MACHINES),
@@ -817,9 +871,9 @@ export default function App() {
         console.warn('LocalStorage clear error:', e);
       }
 
-      alert('All factory data has been successfully cleared!');
+      showToast('success', 'All factory data cleared (safety backup downloaded).');
     } catch (err: any) {
-      alert('Error clearing data: ' + (err?.message || err));
+      showToast('error', 'Error clearing data: ' + formatCloudError(err));
     } finally {
       setIsSyncing(false);
       setIsConfirmClearDataOpen(false);
@@ -1010,6 +1064,7 @@ export default function App() {
               workers={workers}
               adminAttendances={adminAttendances}
               onAddAdminAttendance={handleAddAdminAttendance}
+              onBatchAdminAttendance={handleBatchAdminAttendance}
               onDeleteAdminAttendance={handleDeleteAdminAttendance}
               isAdmin={false}
               isSupervisor2={true}
@@ -1058,6 +1113,7 @@ export default function App() {
                   workers={workers}
                   adminAttendances={adminAttendances}
                   onAddAdminAttendance={handleAddAdminAttendance}
+                  onBatchAdminAttendance={handleBatchAdminAttendance}
                   onDeleteAdminAttendance={handleDeleteAdminAttendance}
                   isAdmin={isAdmin}
                 />
@@ -1068,6 +1124,7 @@ export default function App() {
                   workers={workers}
                   adminAttendances={adminAttendances}
                   onAddAdminAttendance={handleAddAdminAttendance}
+                  onBatchAdminAttendance={handleBatchAdminAttendance}
                   onDeleteAdminAttendance={handleDeleteAdminAttendance}
                   isAdmin={isAdmin}
                   isSupervisor2={isSupervisor2}
@@ -1166,11 +1223,23 @@ export default function App() {
         <ConfirmModal
           isOpen={isConfirmResetOpen}
           title="Reset Demo Dataset"
-          message="Are you sure you want to reset all data? This will overwrite your custom modifications with the fresh demo seed dataset."
+          message="Are you sure you want to reset all data? A safety JSON backup will download automatically before replacing records with the demo seed dataset."
           confirmLabel="Reset"
           type="warning"
           onConfirm={executeResetToSeed}
           onCancel={() => setIsConfirmResetOpen(false)}
+        />
+      )}
+
+      {deleteCompanyConfirm.isOpen && (
+        <ConfirmModal
+          isOpen={deleteCompanyConfirm.isOpen}
+          title="Delete Company"
+          message={deleteCompanyConfirm.message}
+          confirmLabel="Delete Company"
+          type="danger"
+          onConfirm={executeDeleteCompany}
+          onCancel={() => setDeleteCompanyConfirm({ isOpen: false, companyId: '', message: '' })}
         />
       )}
 
@@ -1180,6 +1249,35 @@ export default function App() {
           onClose={() => setIsConfirmClearDataOpen(false)}
           onConfirmClear={executeClearAllData}
         />
+      )}
+
+      {/* Non-blocking System Notification Toast */}
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed bottom-4 right-4 z-[60] max-w-md px-4 py-3 rounded-xl shadow-2xl border flex items-center gap-3 text-xs font-bold animate-in fade-in slide-in-from-bottom-2 duration-150 ${
+            toast.type === 'success'
+              ? 'bg-emerald-950 text-emerald-100 border-emerald-700'
+              : toast.type === 'warning'
+              ? 'bg-amber-950 text-amber-100 border-amber-700'
+              : 'bg-rose-950 text-rose-100 border-rose-700'
+          }`}
+        >
+          {toast.type === 'success' ? (
+            <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+          ) : (
+            <AlertCircle className={`h-4 w-4 shrink-0 ${toast.type === 'warning' ? 'text-amber-400' : 'text-rose-400'}`} />
+          )}
+          <span className="leading-snug flex-1">{toast.message}</span>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="p-1 hover:bg-white/10 rounded-lg transition-colors cursor-pointer shrink-0"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       )}
 
       {/* PWA Windows Installation Guide Modal */}

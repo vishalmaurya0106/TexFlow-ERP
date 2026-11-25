@@ -59,6 +59,7 @@ export default function AttendanceReportDivision({
   const [isPDFModalOpen, setIsPDFModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showOnlyAbsentees, setShowOnlyAbsentees] = useState(false);
+  const [validationError, setValidationError] = useState('');
 
   // Helper to build list of dates in range
   const dateList = useMemo(() => {
@@ -225,9 +226,14 @@ export default function AttendanceReportDivision({
   // Generate Excel (XLSX) Export using SheetJS
   const handleDownloadExcel = () => {
     if (!startDate || !endDate) {
-      alert("Please select both Start Date and End Date.");
+      setValidationError('Please select both Start Date and End Date.');
       return;
     }
+    if (startDate > endDate) {
+      setValidationError('Start Date cannot be later than End Date.');
+      return;
+    }
+    setValidationError('');
 
     const companyTitle = selectedCompanyFilter === 'ALL' 
       ? 'Merged Report - All Companies' 
@@ -350,6 +356,14 @@ export default function AttendanceReportDivision({
         </div>
       </div>
 
+      {/* Inline Validation Notice */}
+      {validationError && (
+        <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs font-bold flex items-center justify-between gap-2">
+          <span>{validationError}</span>
+          <button type="button" onClick={() => setValidationError('')} className="text-rose-500 hover:text-rose-700 cursor-pointer font-bold">✕</button>
+        </div>
+      )}
+
       {/* Control Filters Form */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4 items-end bg-indigo-50/40 p-4 rounded-xl border border-indigo-100">
         
@@ -364,10 +378,10 @@ export default function AttendanceReportDivision({
             value={startDate}
             onChange={(val) => {
               if (!val) {
-                alert("Error: Date cannot be zero! Page is refreshing...");
-                window.location.reload();
+                setValidationError('Start Date cannot be cleared. Keeping last valid date.');
                 return;
               }
+              setValidationError('');
               setStartDate(val);
             }}
             className="bg-white"
@@ -385,10 +399,10 @@ export default function AttendanceReportDivision({
             value={endDate}
             onChange={(val) => {
               if (!val) {
-                alert("Error: Date cannot be zero! Page is refreshing...");
-                window.location.reload();
+                setValidationError('End Date cannot be cleared. Keeping last valid date.');
                 return;
               }
+              setValidationError('');
               setEndDate(val);
             }}
             className="bg-white"

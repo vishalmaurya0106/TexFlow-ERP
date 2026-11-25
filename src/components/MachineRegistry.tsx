@@ -11,10 +11,10 @@ import ConfirmModal from './ConfirmModal';
 interface MachineRegistryProps {
   machines: Machine[];
   companies?: Company[];
-  onToggleMachine: (machineId: string) => void;
-  onAddMachine: (newMachine: Machine) => void;
-  onUpdateMachine?: (updatedMachine: Machine) => void;
-  onDeleteMachine: (machineId: string) => void;
+  onToggleMachine: (machineId: string) => Promise<void> | void;
+  onAddMachine: (newMachine: Machine) => Promise<void> | void;
+  onUpdateMachine?: (updatedMachine: Machine) => Promise<void> | void;
+  onDeleteMachine: (machineId: string) => Promise<void> | void;
   isAdmin?: boolean;
 }
 
@@ -38,14 +38,20 @@ export default function MachineRegistry({
   const [newMachineCompany, setNewMachineCompany] = useState('');
   const [newMachineActive, setNewMachineActive] = useState(true);
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Edit Machine Company Modal State
   const [editingMachine, setEditingMachine] = useState<Machine | null>(null);
   const [editCompanyValue, setEditCompanyValue] = useState('');
+  const [editError, setEditError] = useState('');
+  const [isEditingSubmitting, setIsEditingSubmitting] = useState(false);
 
-  // Delete Machine Modal State
+  // Toggle & Delete State
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [bannerError, setBannerError] = useState('');
   const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = useState(false);
   const [deleteMachineId, setDeleteMachineId] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Calculate smart suggested name for next machine
   const getSuggestedMachineId = () => {
@@ -69,11 +75,17 @@ export default function MachineRegistry({
     setIsAddModalOpen(true);
   };
 
-  const handleAddSubmit = (e: React.FormEvent) => {
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     const formattedId = newMachineId.trim();
     if (!formattedId) {
       setError('Machine Name/ID is required.');
+      return;
+    }
+
+    if (formattedId.length > 64) {
+      setError('Machine Identifier must be 64 characters or fewer.');
       return;
     }
 
@@ -91,31 +103,69 @@ export default function MachineRegistry({
       return;
     }
 
-    onAddMachine({
-      machineId: formattedId,
-      isActive: newMachineActive,
-      companyName: newMachineCompany.trim()
-    });
-    setIsAddModalOpen(false);
+    setIsSubmitting(true);
+    setError('');
+    try {
+      await onAddMachine({
+        machineId: formattedId,
+        isActive: newMachineActive,
+        companyName: newMachineCompany.trim()
+      });
+      setIsAddModalOpen(false);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to add loom machine.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleEditCompanySubmit = (e: React.FormEvent) => {
+  const handleEditCompanySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingMachine || !onUpdateMachine) return;
-    onUpdateMachine({
-      ...editingMachine,
-      companyName: editCompanyValue.trim()
-    });
-    setEditingMachine(null);
+    if (!editingMachine || !onUpdateMachine || isEditingSubmitting) return;
+    setIsEditingSubmitting(true);
+    setEditError('');
+    try {
+      await onUpdateMachine({
+        ...editingMachine,
+        companyName: editCompanyValue.trim()
+      });
+      setEditingMachine(null);
+    } catch (err: any) {
+      setEditError(err?.message || 'Failed to update machine company.');
+    } finally {
+      setIsEditingSubmitting(false);
+    }
   };
 
-  const handleDeleteConfirm = () => {
-    if (!isAdmin) {
-      setIsConfirmDeleteOpen(false);
+  const handleToggle = async (machineId: string) => {
+    if (togglingId) return;
+    setTogglingId(machineId);
+    setBannerError('');
+    try {
+      await onToggleMachine(machineId);
+    } catch (err: any) {
+      setBannerError(err?.message || 'Failed to toggle machine status.');
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!isAdmin || isDeleting) {
+      if (!isAdmin) setIsConfirmDeleteOpen(false);
       return;
     }
-    onDeleteMachine(deleteMachineId);
-    setIsConfirmDeleteOpen(false);
+    setIsDeleting(true);
+    setBannerError('');
+    try {
+      await onDeleteMachine(deleteMachineId);
+      setIsConfirmDeleteOpen(false);
+    } catch (err: any) {
+      setBannerError(err?.message || 'Failed to delete machine.');
+      setIsConfirmDeleteOpen(false);
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   // Filter machines based on selected company
@@ -155,6 +205,15 @@ export default function MachineRegistry({
           </button>
         </div>
       </div>
+
+      {bannerError && (
+        <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs font-bold flex items-center justify-between gap-2">
+          <span>{bannerError}</span>
+          <button type="button" onClick={() => setBannerError('')} className="text-rose-500 hover:text-rose-700 cursor-pointer">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {/* Filter Bar */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -214,6 +273,7 @@ export default function MachineRegistry({
                       onClick={() => {
                         setEditingMachine(machine);
                         setEditCompanyValue(displayCompany);
+                        setEditError('');
                       }}
                       title="Edit Company"
                       className="p-1.5 rounded-lg bg-slate-100 hover:bg-indigo-50 text-slate-400 hover:text-indigo-600 transition-colors cursor-pointer"
@@ -224,9 +284,10 @@ export default function MachineRegistry({
 
                   <button
                     id={`toggle-machine-btn-${machine.machineId.replace(/\s+/g, '-')}`}
-                    onClick={() => onToggleMachine(machine.machineId)}
+                    onClick={() => handleToggle(machine.machineId)}
+                    disabled={togglingId === machine.machineId}
                     title={machine.isActive ? 'Deactivate Machine (Maintenance)' : 'Activate Machine'}
-                    className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                    className={`p-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-50 ${
                       machine.isActive 
                         ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' 
                         : 'bg-rose-50 text-rose-600 hover:bg-rose-100'
@@ -382,9 +443,10 @@ export default function MachineRegistry({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-100 transition-all cursor-pointer"
+                  disabled={isSubmitting}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-100 transition-all cursor-pointer"
                 >
-                  Create Machine
+                  {isSubmitting ? 'Saving...' : 'Create Machine'}
                 </button>
               </div>
             </form>
@@ -411,6 +473,11 @@ export default function MachineRegistry({
             </div>
 
             <form onSubmit={handleEditCompanySubmit} className="p-6 space-y-4">
+              {editError && (
+                <div className="p-3 bg-rose-50 border border-rose-100 rounded-xl text-rose-600 text-xs font-bold">
+                  {editError}
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
                   <Building2 className="h-4 w-4 text-indigo-600" />
@@ -444,6 +511,7 @@ export default function MachineRegistry({
               <div className="pt-2 flex justify-end gap-3 border-t border-slate-100">
                 <button
                   type="button"
+                  disabled={isEditingSubmitting}
                   onClick={() => setEditingMachine(null)}
                   className="px-4 py-2.5 bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-900 font-bold rounded-xl border border-slate-200 text-xs transition-all cursor-pointer"
                 >
@@ -451,9 +519,10 @@ export default function MachineRegistry({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-100 transition-all cursor-pointer"
+                  disabled={isEditingSubmitting}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-100 transition-all cursor-pointer"
                 >
-                  Save Company
+                  {isEditingSubmitting ? 'Saving...' : 'Save Company'}
                 </button>
               </div>
             </form>
@@ -467,9 +536,11 @@ export default function MachineRegistry({
           isOpen={isConfirmDeleteOpen}
           title="Delete Loom Machine"
           message={`Are you sure you want to delete ${deleteMachineId}? This machine will no longer be available for loom production assignments.`}
-          confirmLabel="Delete"
+          confirmLabel={isDeleting ? 'Deleting...' : 'Delete'}
           onConfirm={handleDeleteConfirm}
-          onCancel={() => setIsConfirmDeleteOpen(false)}
+          onCancel={() => {
+            if (!isDeleting) setIsConfirmDeleteOpen(false);
+          }}
         />
       )}
 

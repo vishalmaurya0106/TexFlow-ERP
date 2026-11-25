@@ -8,16 +8,18 @@ import { Worker, AdminAttendance, AttendanceStatus } from '../types';
 import { formatCurrency, formatDate, naturalSortWorkers } from '../utils';
 import ConfirmModal from './ConfirmModal';
 import { DateInput } from './DateInput';
+import { buildDeterministicAdminAttId } from '../lib/firebase';
 import { 
   Building, UserCheck, ClipboardCheck, 
-  Trash2, Plus, Info, Check, Sparkles, Save, Filter, X 
+  Trash2, Info, Check, Sparkles, Save, Filter, X, AlertTriangle 
 } from 'lucide-react';
 
 interface AdminAttendanceRegisterProps {
   workers: Worker[];
   adminAttendances: AdminAttendance[];
-  onAddAdminAttendance: (attendance: AdminAttendance) => void;
-  onDeleteAdminAttendance: (id: string) => void;
+  onAddAdminAttendance: (attendance: AdminAttendance) => Promise<void> | void;
+  onBatchAdminAttendance?: (records: AdminAttendance[]) => Promise<void> | void;
+  onDeleteAdminAttendance: (id: string) => Promise<void> | void;
   isAdmin?: boolean;
 }
 
@@ -25,6 +27,7 @@ export default function AdminAttendanceRegister({
   workers,
   adminAttendances,
   onAddAdminAttendance,
+  onBatchAdminAttendance,
   onDeleteAdminAttendance,
   isAdmin = false
 }: AdminAttendanceRegisterProps) {
@@ -35,7 +38,9 @@ export default function AdminAttendanceRegister({
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedShift, setSelectedShift] = useState<'Day' | 'Night'>('Day');
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [isSavingAll, setIsSavingAll] = useState(false);
   const [saveAllSuccess, setSaveAllSuccess] = useState(false);
+  const [errorBanner, setErrorBanner] = useState('');
 
   // Staged selection before clicking save
   const [stagedStatuses, setStagedStatuses] = useState<Record<string, AttendanceStatus>>({});
@@ -44,6 +49,7 @@ export default function AdminAttendanceRegister({
   const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = useState(false);
   const [deleteAdminAttendanceId, setDeleteAdminAttendanceId] = useState('');
   const [deleteAdminAttendanceMessage, setDeleteAdminAttendanceMessage] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Get saved attendance status for a worker on the selected date & shift
   const getSavedAttendance = (workerId: string) => {
@@ -67,9 +73,11 @@ export default function AdminAttendanceRegister({
     }));
   };
 
-  const handleSaveSingleAdmin = (admin: Worker) => {
+  const handleSaveSingleAdmin = async (admin: Worker) => {
+    if (savingId === admin.workerId || isSavingAll) return;
     const status = stagedStatuses[admin.workerId] || 'Present';
     setSavingId(admin.workerId);
+    setErrorBanner('');
 
     let calculatedWage = 0;
     if (status === 'Present') {
@@ -83,7 +91,7 @@ export default function AdminAttendanceRegister({
     const matchedId = adminAttendances.find(a => a.workerId === admin.workerId && a.date === selectedDate && (a.shift || 'Day') === selectedShift)?.adminAttendanceId;
 
     const payload: AdminAttendance = {
-      adminAttendanceId: matchedId || `AA-${Date.now()}-${admin.workerId}-${selectedShift.toLowerCase()}`,
+      adminAttendanceId: matchedId || buildDeterministicAdminAttId(selectedDate, selectedShift, admin.workerId),
       workerId: admin.workerId,
       date: selectedDate,
       status,
@@ -91,15 +99,21 @@ export default function AdminAttendanceRegister({
       shift: selectedShift
     };
 
-    onAddAdminAttendance(payload);
-
-    setTimeout(() => {
+    try {
+      await onAddAdminAttendance(payload);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Failed to save attendance record.');
+    } finally {
       setSavingId(null);
-    }, 500);
+    }
   };
 
-  const handleSaveAllAdmins = () => {
-    adminStaff.forEach(admin => {
+  const handleSaveAllAdmins = async () => {
+    if (isSavingAll || adminStaff.length === 0) return;
+    setIsSavingAll(true);
+    setErrorBanner('');
+
+    const payloads: AdminAttendance[] = adminStaff.map(admin => {
       const status = stagedStatuses[admin.workerId] || 'Present';
       let calculatedWage = 0;
       if (status === 'Present') {
@@ -112,22 +126,31 @@ export default function AdminAttendanceRegister({
 
       const matchedId = adminAttendances.find(a => a.workerId === admin.workerId && a.date === selectedDate && (a.shift || 'Day') === selectedShift)?.adminAttendanceId;
 
-      const payload: AdminAttendance = {
-        adminAttendanceId: matchedId || `AA-${Date.now()}-${admin.workerId}-${selectedShift.toLowerCase()}`,
+      return {
+        adminAttendanceId: matchedId || buildDeterministicAdminAttId(selectedDate, selectedShift, admin.workerId),
         workerId: admin.workerId,
         date: selectedDate,
         status,
         calculatedWage: parseFloat(calculatedWage.toFixed(2)),
         shift: selectedShift
       };
-
-      onAddAdminAttendance(payload);
     });
 
-    setSaveAllSuccess(true);
-    setTimeout(() => {
-      setSaveAllSuccess(false);
-    }, 1500);
+    try {
+      if (onBatchAdminAttendance) {
+        await onBatchAdminAttendance(payloads);
+      } else {
+        for (const p of payloads) {
+          await onAddAdminAttendance(p);
+        }
+      }
+      setSaveAllSuccess(true);
+      setTimeout(() => setSaveAllSuccess(false), 1500);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Failed to save all attendance records.');
+    } finally {
+      setIsSavingAll(false);
+    }
   };
 
   // Date Range Filter State (Default to Today)
@@ -212,15 +235,23 @@ export default function AdminAttendanceRegister({
                 <button
                   type="button"
                   id="save-all-admin-attendance-btn"
+                  disabled={isSavingAll}
                   onClick={handleSaveAllAdmins}
-                  className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
                 >
                   <Save className="h-4 w-4" />
-                  <span>{saveAllSuccess ? 'All Saved ✓' : `Save All (${selectedShift})`}</span>
+                  <span>{isSavingAll ? 'Saving All...' : saveAllSuccess ? 'All Saved ✓' : `Save All (${selectedShift})`}</span>
                 </button>
               )}
             </div>
           </div>
+
+          {errorBanner && (
+            <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs font-bold flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+              <span>{errorBanner}</span>
+            </div>
+          )}
 
           {/* Guidelines info */}
           <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200/60 flex items-start gap-3 text-xs text-slate-500 mb-6">
@@ -327,8 +358,9 @@ export default function AdminAttendanceRegister({
                       <button
                         type="button"
                         id={`btn-save-admin-${admin.workerId}`}
+                        disabled={isSaving || isSavingAll}
                         onClick={() => handleSaveSingleAdmin(admin)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-2xs ${
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-2xs disabled:opacity-60 ${
                           isSaving
                             ? 'bg-emerald-700 text-white'
                             : isModified
@@ -540,16 +572,22 @@ export default function AdminAttendanceRegister({
           isOpen={isConfirmDeleteOpen}
           title="Delete Attendance Record"
           message={deleteAdminAttendanceMessage}
-          onConfirm={() => {
-            if (!isAdmin) {
-              setIsConfirmDeleteOpen(false);
+          confirmLabel={isDeleting ? 'Deleting...' : 'Delete'}
+          onConfirm={async () => {
+            if (!isAdmin || isDeleting) {
+              if (!isAdmin) setIsConfirmDeleteOpen(false);
               return;
             }
-            onDeleteAdminAttendance(deleteAdminAttendanceId);
-            setIsConfirmDeleteOpen(false);
+            setIsDeleting(true);
+            try {
+              await onDeleteAdminAttendance(deleteAdminAttendanceId);
+              setIsConfirmDeleteOpen(false);
+            } finally {
+              setIsDeleting(false);
+            }
           }}
           onCancel={() => {
-            setIsConfirmDeleteOpen(false);
+            if (!isDeleting) setIsConfirmDeleteOpen(false);
           }}
         />
       )}

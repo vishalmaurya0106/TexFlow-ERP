@@ -75,6 +75,7 @@ export default function LoomReportsRegister({
   const [isPDFModalOpen, setIsPDFModalOpen] = useState<boolean>(false);
   const [isGenerateMenuOpen, setIsGenerateMenuOpen] = useState<boolean>(false);
   const [lastGeneratedAt, setLastGeneratedAt] = useState<string>(() => new Date().toLocaleTimeString());
+  const [validationError, setValidationError] = useState<string>('');
 
   // Helper to build list of dates in selected range
   const dateList = useMemo(() => {
@@ -233,9 +234,14 @@ export default function LoomReportsRegister({
   // Excel (.xlsx) Export Handler
   const handleDownloadExcel = () => {
     if (!startDate || !endDate) {
-      alert('Please select both Start Date and End Date.');
+      setValidationError('Please select both From Date and To Date before exporting.');
       return;
     }
+    if (startDate > endDate) {
+      setValidationError('From Date cannot be later than To Date.');
+      return;
+    }
+    setValidationError('');
 
     const companyTitle = selectedCompanyFilter === 'ALL' 
       ? 'Merged Report - All Companies' 
@@ -341,6 +347,12 @@ export default function LoomReportsRegister({
 
       {/* Control & Filter Panel */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+        {validationError && (
+          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs font-bold flex items-center justify-between gap-2">
+            <span>{validationError}</span>
+            <button type="button" onClick={() => setValidationError('')} className="text-rose-500 hover:text-rose-700 cursor-pointer font-bold">✕</button>
+          </div>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4 items-end">
           
           {/* 1. Start Date */}

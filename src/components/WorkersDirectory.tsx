@@ -19,9 +19,9 @@ import {
 interface WorkersDirectoryProps {
   workers: Worker[];
   companies?: Company[];
-  onAddWorker: (worker: Worker) => void;
-  onUpdateWorker: (worker: Worker) => void;
-  onDeleteWorker: (workerId: string) => void;
+  onAddWorker: (worker: Worker) => Promise<void> | void;
+  onUpdateWorker: (worker: Worker) => Promise<void> | void;
+  onDeleteWorker: (workerId: string) => Promise<void> | void;
   onBatchImportWorkers?: (importedWorkers: Worker[]) => Promise<void> | void;
   isAdmin?: boolean;
 }
@@ -73,8 +73,14 @@ export default function WorkersDirectory({
   const [formIfsc, setFormIfsc] = useState('');
   const [formBeneficiary, setFormBeneficiary] = useState('');
 
-  // Validation Error state
+  // Validation Error & Async Submission states
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
+  const [submitError, setSubmitError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [togglingWorkerId, setTogglingWorkerId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [bannerNotice, setBannerNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Reset form helper
   const resetForm = () => {
@@ -95,6 +101,7 @@ export default function WorkersDirectory({
     setFormIfsc('');
     setFormBeneficiary('');
     setErrors({});
+    setSubmitError('');
   };
 
   const handleOpenAddModal = () => {
@@ -135,22 +142,28 @@ export default function WorkersDirectory({
 
     if (!formWorkerId.trim()) {
       newErrors.workerId = 'Employee ID is required';
+    } else if (formWorkerId.trim().length > 64) {
+      newErrors.workerId = 'Employee ID must be 64 characters or fewer';
     } else if (!isEditMode && workers.some(w => w.workerId.toLowerCase() === formWorkerId.trim().toLowerCase())) {
       newErrors.workerId = 'Employee ID already exists';
     }
 
     if (!formName.trim()) {
       newErrors.name = 'Employee Name is required';
+    } else if (formName.trim().length > 120) {
+      newErrors.name = 'Employee Name must be 120 characters or fewer';
     }
 
     if (!formCompany.trim()) {
       newErrors.company = 'Company selection is mandatory';
+    } else if (formCompany.trim().length > 120) {
+      newErrors.company = 'Company Name must be 120 characters or fewer';
     }
 
     if (!formRate.trim()) {
       newErrors.rate = 'Wages / Salary rate is required';
-    } else if (isNaN(parseFloat(formRate)) || parseFloat(formRate) < 0) {
-      newErrors.rate = 'Wages / Salary rate must be a valid number';
+    } else if (isNaN(parseFloat(formRate)) || parseFloat(formRate) < 0 || parseFloat(formRate) > 1000000) {
+      newErrors.rate = 'Wages / Salary rate must be between 0 and 1,000,000';
     }
 
     // Mobile is optional, but validate format if entered
@@ -165,46 +178,54 @@ export default function WorkersDirectory({
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!validateForm()) return;
 
     const parsedRate = parseFloat(parseFloat(formRate).toFixed(2));
     const parsedMonthlySalary = formMonthlySalary.trim() !== '' && !isNaN(parseFloat(formMonthlySalary))
-      ? parseFloat(parseFloat(formMonthlySalary).toFixed(2))
+      ? Math.min(10000000, Math.max(0, parseFloat(parseFloat(formMonthlySalary).toFixed(2))))
       : undefined;
     const parsedMonthlyDays = formMonthlyDays.trim() !== '' && !isNaN(parseFloat(formMonthlyDays))
-      ? parseFloat(formMonthlyDays)
+      ? Math.min(31, Math.max(0, parseFloat(formMonthlyDays)))
       : undefined;
     
     const workerPayload: Worker = {
-      workerId: formWorkerId.trim(),
-      name: formName.trim(),
-      companyName: formCompany.trim(),
-      mobileNumber: formMobile.trim(),
-      address: formAddress.trim(),
-      joiningDate: formJoiningDate,
-      aadhaarNumber: formAadhaar.trim(),
+      workerId: formWorkerId.trim().slice(0, 64),
+      name: formName.trim().slice(0, 120),
+      companyName: formCompany.trim().slice(0, 120),
+      mobileNumber: formMobile.trim().slice(0, 30),
+      address: formAddress.trim().slice(0, 300),
+      joiningDate: (formJoiningDate || new Date().toISOString().split('T')[0]).slice(0, 20),
+      aadhaarNumber: formAadhaar.trim().slice(0, 30),
       isActive: formIsActive,
       perMachineRate: parsedRate,
       monthlySalary: parsedMonthlySalary,
       monthlyDays: parsedMonthlyDays,
       employeeType: formType,
       bankDetails: {
-        bankName: formBankName.trim(),
-        accountNumber: formAccNumber.trim(),
-        ifscCode: formIfsc.trim().toUpperCase(),
-        beneficiaryName: formBeneficiary.trim() || formName.trim()
+        bankName: formBankName.trim().slice(0, 100),
+        accountNumber: formAccNumber.trim().slice(0, 40),
+        ifscCode: formIfsc.trim().toUpperCase().slice(0, 20),
+        beneficiaryName: (formBeneficiary.trim() || formName.trim()).slice(0, 120)
       }
     };
 
-    if (isEditMode) {
-      onUpdateWorker(workerPayload);
-    } else {
-      onAddWorker(workerPayload);
+    setIsSubmitting(true);
+    setSubmitError('');
+    try {
+      if (isEditMode) {
+        await onUpdateWorker(workerPayload);
+      } else {
+        await onAddWorker(workerPayload);
+      }
+      setIsModalOpen(false);
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to save employee record.');
+    } finally {
+      setIsSubmitting(false);
     }
-    
-    setIsModalOpen(false);
   };
 
   // --- Excel Sample Download ---
@@ -278,9 +299,17 @@ export default function WorkersDirectory({
   // --- Excel File Upload Parser ---
   const handleExcelFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || isImporting) return;
+
+    setIsImporting(true);
+    setBannerNotice(null);
 
     const reader = new FileReader();
+    reader.onerror = () => {
+      setBannerNotice({ type: 'error', message: 'Failed to read selected Excel file.' });
+      setIsImporting(false);
+      if (e.target) e.target.value = '';
+    };
     reader.onload = async (evt) => {
       try {
         const bstr = evt.target?.result;
@@ -290,7 +319,7 @@ export default function WorkersDirectory({
         const jsonRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
         if (!jsonRows || jsonRows.length === 0) {
-          alert("The selected Excel file is empty or invalid.");
+          setBannerNotice({ type: 'error', message: 'The selected Excel file is empty or invalid.' });
           return;
         }
 
@@ -309,13 +338,13 @@ export default function WorkersDirectory({
             return '';
           };
 
-          const rawId = getKey(['Employee ID', 'workerId', 'ID', 'Id', 'Emp ID']);
-          const rawName = getKey(['Full Name', 'Name', 'Employee Name', 'name']);
+          const rawId = getKey(['Employee ID', 'workerId', 'ID', 'Id', 'Emp ID']).slice(0, 64);
+          const rawName = getKey(['Full Name', 'Name', 'Employee Name', 'name']).slice(0, 120);
           
           if (!rawId || !rawName) return;
 
-          const companyName = getKey(['Company Name', 'Company', 'companyName', 'Company']) || 
-                              (companies.length > 0 ? companies[0].name : "TexFlow Textiles Pvt Ltd");
+          const companyName = (getKey(['Company Name', 'Company', 'companyName', 'Company']) || 
+                              (companies.length > 0 ? companies[0].name : "TexFlow Textiles Pvt Ltd")).slice(0, 120);
 
           const rawType = getKey(['Employee Type', 'Type', 'Designation']);
           const rawTypeLower = rawType.toLowerCase();
@@ -326,21 +355,30 @@ export default function WorkersDirectory({
               : 'Worker';
 
           const rawRate = getKey(['Per Machine or Daily Rate', 'Rate', 'perMachineRate', 'Salary', 'Wage']);
-          const parsedRate = parseFloat(rawRate) || 0;
+          const numericRate = parseFloat(rawRate);
+          const parsedRate = Number.isFinite(numericRate) && numericRate >= 0
+            ? Math.min(1000000, parseFloat(numericRate.toFixed(2)))
+            : 0;
 
           const rawMonthlySalary = getKey(['Monthly Salary', 'monthlySalary', 'Monthly Fixed Salary']);
           const rawMonthlyDays = getKey(['Monthly Days', 'monthlyDays', 'Working Days']);
-          const parsedMonthlySalary = rawMonthlySalary ? parseFloat(rawMonthlySalary) || undefined : undefined;
-          const parsedMonthlyDays = rawMonthlyDays ? parseFloat(rawMonthlyDays) || undefined : undefined;
+          const numMS = parseFloat(rawMonthlySalary);
+          const numMD = parseFloat(rawMonthlyDays);
+          const parsedMonthlySalary = rawMonthlySalary && Number.isFinite(numMS) && numMS >= 0
+            ? Math.min(10000000, parseFloat(numMS.toFixed(2)))
+            : undefined;
+          const parsedMonthlyDays = rawMonthlyDays && Number.isFinite(numMD) && numMD >= 0
+            ? Math.min(31, numMD)
+            : undefined;
 
-          const mobile = getKey(['Mobile Number', 'Mobile', 'mobileNumber', 'Phone']);
-          const aadhaar = getKey(['Aadhaar Number', 'Aadhaar', 'aadhaarNumber']);
-          const address = getKey(['Address', 'address']);
-          const joiningDate = getKey(['Joining Date', 'Joining', 'joiningDate']) || new Date().toISOString().split('T')[0];
-          const bankName = getKey(['Bank Name', 'Bank', 'bankName']);
-          const accountNumber = getKey(['Account Number', 'Account', 'accountNumber']);
-          const ifscCode = getKey(['IFSC Code', 'IFSC', 'ifscCode']);
-          const beneficiaryName = getKey(['Beneficiary Name', 'Beneficiary', 'beneficiaryName']);
+          const mobile = getKey(['Mobile Number', 'Mobile', 'mobileNumber', 'Phone']).slice(0, 30);
+          const aadhaar = getKey(['Aadhaar Number', 'Aadhaar', 'aadhaarNumber']).slice(0, 30);
+          const address = getKey(['Address', 'address']).slice(0, 300);
+          const joiningDate = (getKey(['Joining Date', 'Joining', 'joiningDate']) || new Date().toISOString().split('T')[0]).slice(0, 20);
+          const bankName = getKey(['Bank Name', 'Bank', 'bankName']).slice(0, 100);
+          const accountNumber = getKey(['Account Number', 'Account', 'accountNumber']).slice(0, 40);
+          const ifscCode = getKey(['IFSC Code', 'IFSC', 'ifscCode']).slice(0, 20);
+          const beneficiaryName = getKey(['Beneficiary Name', 'Beneficiary', 'beneficiaryName']).slice(0, 120);
 
           const existingWorker = workers.find(w => w.workerId.toLowerCase() === rawId.toLowerCase());
 
@@ -361,7 +399,7 @@ export default function WorkersDirectory({
               bankName: bankName,
               accountNumber: accountNumber,
               ifscCode: ifscCode.toUpperCase(),
-              beneficiaryName: beneficiaryName || rawName
+              beneficiaryName: (beneficiaryName || rawName).slice(0, 120)
             }
           };
 
@@ -374,7 +412,7 @@ export default function WorkersDirectory({
         });
 
         if (importedList.length === 0) {
-          alert("No valid employee rows found in the Excel file. Please ensure 'Employee ID' and 'Full Name' columns are filled.");
+          setBannerNotice({ type: 'error', message: "No valid employee rows found in Excel. Ensure 'Employee ID' and 'Full Name' columns are filled." });
           return;
         }
 
@@ -383,15 +421,19 @@ export default function WorkersDirectory({
         } else {
           for (const w of importedList) {
             const existing = workers.find(ew => ew.workerId.toLowerCase() === w.workerId.toLowerCase());
-            if (existing) onUpdateWorker(w);
-            else onAddWorker(w);
+            if (existing) await onUpdateWorker(w);
+            else await onAddWorker(w);
           }
         }
 
-        alert(`Excel Import Successful!\n\n• New Employees Added: ${addedCount}\n• Existing Profiles Updated: ${updatedCount}\n• Total Processed: ${importedList.length}\n\nAll records are permanently saved to Firebase Cloud Database!`);
+        setBannerNotice({
+          type: 'success',
+          message: `Excel import complete: ${addedCount} added, ${updatedCount} updated (${importedList.length} total saved to cloud).`
+        });
       } catch (err: any) {
-        alert(`Error parsing Excel file: ${err?.message || 'Invalid format'}`);
+        setBannerNotice({ type: 'error', message: `Error importing Excel file: ${err?.message || 'Invalid format'}` });
       } finally {
+        setIsImporting(false);
         if (e.target) e.target.value = '';
       }
     };
@@ -399,11 +441,20 @@ export default function WorkersDirectory({
     reader.readAsBinaryString(file);
   };
 
-  const toggleWorkerStatus = (worker: Worker) => {
-    onUpdateWorker({
-      ...worker,
-      isActive: !worker.isActive
-    });
+  const toggleWorkerStatus = async (worker: Worker) => {
+    if (togglingWorkerId) return;
+    setTogglingWorkerId(worker.workerId);
+    setBannerNotice(null);
+    try {
+      await onUpdateWorker({
+        ...worker,
+        isActive: !worker.isActive
+      });
+    } catch (err: any) {
+      setBannerNotice({ type: 'error', message: err?.message || 'Failed to update employee status.' });
+    } finally {
+      setTogglingWorkerId(null);
+    }
   };
 
   // Filter & Natural Sort
@@ -461,12 +512,13 @@ export default function WorkersDirectory({
           {/* Upload Excel */}
           <button
             type="button"
+            disabled={isImporting}
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3.5 py-2.5 rounded-xl shadow-sm transition-all text-xs cursor-pointer"
+            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold px-3.5 py-2.5 rounded-xl shadow-sm transition-all text-xs cursor-pointer"
             title="Import employees from Excel (.xlsx, .csv) file"
           >
             <Upload className="h-4 w-4" />
-            Upload Excel
+            {isImporting ? 'Importing...' : 'Upload Excel'}
           </button>
 
           {/* Register Single Employee */}
@@ -480,6 +532,20 @@ export default function WorkersDirectory({
           </button>
         </div>
       </div>
+
+      {/* Non-blocking Status / Error Banner */}
+      {bannerNotice && (
+        <div className={`p-3.5 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 ${
+          bannerNotice.type === 'success'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+            : 'bg-rose-50 border-rose-200 text-rose-700'
+        }`}>
+          <span>{bannerNotice.message}</span>
+          <button type="button" onClick={() => setBannerNotice(null)} className="cursor-pointer opacity-70 hover:opacity-100">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {/* Filter Bar */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 bg-white p-5 rounded-2xl border border-slate-150 shadow-sm">
@@ -627,15 +693,16 @@ export default function WorkersDirectory({
                     </td>
                     <td className="px-6 py-4.5">
                       <button
+                        disabled={togglingWorkerId === worker.workerId}
                         onClick={() => toggleWorkerStatus(worker)}
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border transition-colors cursor-pointer ${
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border transition-colors cursor-pointer disabled:opacity-50 ${
                           worker.isActive 
                             ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' 
                             : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
                         }`}
                       >
                         <span className={`h-1.5 w-1.5 rounded-full ${worker.isActive ? 'bg-emerald-600' : 'bg-rose-600'}`}></span>
-                        {worker.isActive ? 'Active' : 'Inactive'}
+                        {togglingWorkerId === worker.workerId ? '...' : worker.isActive ? 'Active' : 'Inactive'}
                       </button>
                     </td>
                     <td className="px-6 py-4.5 text-right">
@@ -692,6 +759,12 @@ export default function WorkersDirectory({
 
             {/* Modal Body / Form */}
             <form id="worker-profile-form" onSubmit={handleSubmit} className="p-6 space-y-6 max-h-[80vh] overflow-y-auto">
+              {submitError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs font-bold flex items-center gap-2">
+                  <ShieldAlert className="h-4 w-4 shrink-0" />
+                  <span>{submitError}</span>
+                </div>
+              )}
               
               {/* Core Details */}
               <div>
@@ -1019,18 +1092,20 @@ export default function WorkersDirectory({
                 <button
                   type="button"
                   id="cancel-worker-form-btn"
+                  disabled={isSubmitting}
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4.5 py-2 text-slate-600 font-bold bg-slate-100 hover:bg-slate-200 transition-colors rounded-xl text-sm cursor-pointer"
+                  className="px-4.5 py-2 text-slate-600 font-bold bg-slate-100 hover:bg-slate-200 transition-colors rounded-xl text-sm cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   id="submit-worker-form-btn"
-                  className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition-all rounded-xl text-sm flex items-center gap-1 cursor-pointer"
+                  disabled={isSubmitting}
+                  className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold transition-all rounded-xl text-sm flex items-center gap-1 cursor-pointer"
                 >
                   <Check className="h-4.5 w-4.5 text-white" />
-                  {isEditMode ? 'Update Profile' : 'Save & Register'}
+                  {isSubmitting ? 'Saving...' : isEditMode ? 'Update Profile' : 'Save & Register'}
                 </button>
               </div>
             </form>
@@ -1043,16 +1118,26 @@ export default function WorkersDirectory({
           isOpen={isConfirmDeleteOpen}
           title="Delete Employee"
           message={`Are you absolutely sure you want to delete ${deleteWorkerName} (ID: ${deleteWorkerId})? This will also remove their associated logs.`}
-          onConfirm={() => {
-            if (!isAdmin) {
-              setIsConfirmDeleteOpen(false);
+          confirmLabel={isDeleting ? 'Deleting...' : 'Delete'}
+          onConfirm={async () => {
+            if (!isAdmin || isDeleting) {
+              if (!isAdmin) setIsConfirmDeleteOpen(false);
               return;
             }
-            onDeleteWorker(deleteWorkerId);
-            setIsConfirmDeleteOpen(false);
+            setIsDeleting(true);
+            setBannerNotice(null);
+            try {
+              await onDeleteWorker(deleteWorkerId);
+              setIsConfirmDeleteOpen(false);
+            } catch (err: any) {
+              setBannerNotice({ type: 'error', message: err?.message || 'Failed to delete employee.' });
+              setIsConfirmDeleteOpen(false);
+            } finally {
+              setIsDeleting(false);
+            }
           }}
           onCancel={() => {
-            setIsConfirmDeleteOpen(false);
+            if (!isDeleting) setIsConfirmDeleteOpen(false);
           }}
         />
       )}

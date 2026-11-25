@@ -1,29 +1,301 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /companies/{companyId} {
-      allow read, write: if true;
-    }
-    match /workers/{workerId} {
-      allow read, write: if true;
-    }
-    match /machines/{machineId} {
-      allow read, write: if true;
-    }
-    match /daily_works/{workId} {
-      allow read, write: if true;
-    }
-    match /admin_attendances/{attendanceId} {
-      allow read, write: if true;
-    }
-    match /attendances/{attendanceId} {
-      allow read, write: if true;
-    }
-    match /salaries/{salaryId} {
-      allow read, write: if true;
-    }
+    // Global default-deny safety net
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
+    }
+
+    // Connection probe document
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // ==========================================
+    // PRIMITIVE HELPERS
+    // ==========================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email_verified == true &&
+        (
+          request.auth.token.email == 'vishalmaurya0106@gmail.com' ||
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        );
+    }
+
+    function isValidDateStr(d) {
+      return d is string && d.size() == 10 && d.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function isValidMonthStr(m) {
+      return m is string && m.size() == 7 && m.matches('^\\d{4}-\\d{2}$');
+    }
+
+    function isValidShift(s) {
+      return s is string && s.size() <= 10 && s in ['Day', 'Night'];
+    }
+
+    function isValidAttStatus(s) {
+      return s is string && s.size() <= 16 && s in ['Present', 'Absent', 'Half-Day'];
+    }
+
+    // ==========================================
+    // ENTITY VALIDATION BLUEPRINTS
+    // ==========================================
+    function isValidCompany(data) {
+      return data.keys().hasAll(['companyId', 'name']) &&
+        data.keys().hasOnly(['companyId', 'name']) &&
+        isValidId(data.companyId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120;
+    }
+
+    function isValidBankDetails(bd) {
+      return bd is map &&
+        bd.keys().hasOnly(['bankName', 'accountNumber', 'ifscCode', 'beneficiaryName']) &&
+        (!('bankName' in bd) || (bd.bankName is string && bd.bankName.size() <= 100)) &&
+        (!('accountNumber' in bd) || (bd.accountNumber is string && bd.accountNumber.size() <= 40)) &&
+        (!('ifscCode' in bd) || (bd.ifscCode is string && bd.ifscCode.size() <= 20)) &&
+        (!('beneficiaryName' in bd) || (bd.beneficiaryName is string && bd.beneficiaryName.size() <= 120));
+    }
+
+    function isValidWorker(data) {
+      return data.keys().hasAll([
+          'workerId', 'name', 'mobileNumber', 'address', 'joiningDate',
+          'bankDetails', 'aadhaarNumber', 'isActive', 'perMachineRate',
+          'employeeType', 'companyName'
+        ]) &&
+        data.keys().hasOnly([
+          'workerId', 'name', 'mobileNumber', 'address', 'joiningDate',
+          'bankDetails', 'aadhaarNumber', 'isActive', 'perMachineRate',
+          'monthlySalary', 'monthlyDays', 'employeeType', 'companyName'
+        ]) &&
+        data.workerId is string && data.workerId.size() >= 1 && data.workerId.size() <= 64 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.mobileNumber is string && data.mobileNumber.size() <= 30 &&
+        data.address is string && data.address.size() <= 300 &&
+        data.joiningDate is string && data.joiningDate.size() <= 20 &&
+        isValidBankDetails(data.bankDetails) &&
+        data.aadhaarNumber is string && data.aadhaarNumber.size() <= 30 &&
+        data.isActive is bool &&
+        data.perMachineRate is number && data.perMachineRate >= 0 && data.perMachineRate <= 1000000 &&
+        (!('monthlySalary' in data) || (data.monthlySalary is number && data.monthlySalary >= 0 && data.monthlySalary <= 10000000)) &&
+        (!('monthlyDays' in data) || (data.monthlyDays is number && data.monthlyDays >= 0 && data.monthlyDays <= 31)) &&
+        data.employeeType is string && data.employeeType.size() <= 30 && data.employeeType in ['Worker', 'Admin Employee', 'Others'] &&
+        data.companyName is string && data.companyName.size() <= 120;
+    }
+
+    function isValidMachine(data) {
+      return data.keys().hasAll(['machineId', 'isActive', 'companyName']) &&
+        data.keys().hasOnly(['machineId', 'isActive', 'companyName']) &&
+        data.machineId is string && data.machineId.size() >= 1 && data.machineId.size() <= 64 &&
+        data.isActive is bool &&
+        data.companyName is string && data.companyName.size() <= 120;
+    }
+
+    function isValidDailyWork(data) {
+      return data.keys().hasAll([
+          'workId', 'workerId', 'date', 'selectedMachines',
+          'machineCount', 'perMachineRate', 'calculatedWage', 'shift'
+        ]) &&
+        data.keys().hasOnly([
+          'workId', 'workerId', 'date', 'selectedMachines',
+          'machineCount', 'perMachineRate', 'calculatedWage', 'shift'
+        ]) &&
+        isValidId(data.workId) &&
+        data.workerId is string && data.workerId.size() >= 1 && data.workerId.size() <= 64 &&
+        isValidDateStr(data.date) &&
+        data.selectedMachines is list &&
+        data.selectedMachines.size() >= 1 &&
+        data.selectedMachines.size() <= 50 &&
+        data.selectedMachines[0] is string &&
+        data.selectedMachines[0].size() >= 1 &&
+        data.selectedMachines[0].size() <= 64 &&
+        data.machineCount is int &&
+        data.machineCount == data.selectedMachines.size() &&
+        data.perMachineRate is number && data.perMachineRate >= 0 && data.perMachineRate <= 1000000 &&
+        data.calculatedWage is number && data.calculatedWage >= 0 && data.calculatedWage <= 10000000 &&
+        isValidShift(data.shift);
+    }
+
+    function isValidDailyWorkLock(data) {
+      return data.keys().hasAll(['lockId', 'lockType', 'workId', 'date', 'shift', 'targetId']) &&
+        data.keys().hasOnly(['lockId', 'lockType', 'workId', 'date', 'shift', 'targetId']) &&
+        isValidId(data.lockId) &&
+        data.lockType is string && data.lockType.size() <= 16 && data.lockType in ['worker', 'machine'] &&
+        isValidId(data.workId) &&
+        isValidDateStr(data.date) &&
+        isValidShift(data.shift) &&
+        data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 64;
+    }
+
+    function isValidAdminAttendance(data) {
+      return data.keys().hasAll(['adminAttendanceId', 'workerId', 'date', 'status', 'calculatedWage']) &&
+        data.keys().hasOnly(['adminAttendanceId', 'workerId', 'date', 'status', 'calculatedWage', 'shift']) &&
+        isValidId(data.adminAttendanceId) &&
+        data.workerId is string && data.workerId.size() >= 1 && data.workerId.size() <= 64 &&
+        isValidDateStr(data.date) &&
+        isValidAttStatus(data.status) &&
+        data.calculatedWage is number && data.calculatedWage >= 0 && data.calculatedWage <= 1000000 &&
+        (!('shift' in data) || isValidShift(data.shift));
+    }
+
+    function isValidAttendance(data) {
+      return data.keys().hasAll(['attendanceId', 'workerId', 'date', 'status', 'inTime', 'outTime']) &&
+        data.keys().hasOnly(['attendanceId', 'workerId', 'date', 'status', 'inTime', 'outTime', 'shift']) &&
+        isValidId(data.attendanceId) &&
+        data.workerId is string && data.workerId.size() >= 1 && data.workerId.size() <= 64 &&
+        isValidDateStr(data.date) &&
+        isValidAttStatus(data.status) &&
+        data.inTime is string && data.inTime.size() <= 20 &&
+        data.outTime is string && data.outTime.size() <= 20 &&
+        (!('shift' in data) || isValidShift(data.shift));
+    }
+
+    function isValidSalary(data) {
+      return data.keys().hasAll([
+          'salaryId', 'workerId', 'month', 'baseSalary',
+          'bonus', 'advance', 'deductions', 'netSalary', 'status'
+        ]) &&
+        data.keys().hasOnly([
+          'salaryId', 'workerId', 'month', 'baseSalary',
+          'bonus', 'advance', 'deductions', 'netSalary', 'status'
+        ]) &&
+        isValidId(data.salaryId) &&
+        data.workerId is string && data.workerId.size() >= 1 && data.workerId.size() <= 64 &&
+        isValidMonthStr(data.month) &&
+        data.baseSalary is number && data.baseSalary >= 0 && data.baseSalary <= 100000000 &&
+        data.bonus is number && data.bonus >= 0 && data.bonus <= 100000000 &&
+        data.advance is number && data.advance >= 0 && data.advance <= 100000000 &&
+        data.deductions is number && data.deductions >= 0 && data.deductions <= 100000000 &&
+        data.netSalary is number && data.netSalary >= -100000000 && data.netSalary <= 100000000 &&
+        data.status is string && data.status.size() <= 16 && data.status in ['Pending', 'Paid'];
+    }
+
+    // ==========================================
+    // COLLECTION RULES
+    // ==========================================
+    match /companies/{companyId} {
+      allow get: if isValidId(companyId);
+      allow list: if request.time != null;
+      allow create: if isValidId(companyId) && isValidCompany(incoming());
+      allow update: if isValidId(companyId) &&
+        isValidCompany(incoming()) &&
+        incoming().companyId == existing().companyId &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'companyId']);
+      allow delete: if isValidId(companyId);
+    }
+
+    match /workers/{workerId} {
+      allow get: if isValidId(workerId);
+      allow list: if request.time != null;
+      allow create: if isValidId(workerId) && isValidWorker(incoming());
+      allow update: if isValidId(workerId) &&
+        isValidWorker(incoming()) &&
+        incoming().workerId == existing().workerId &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'workerId', 'name', 'mobileNumber', 'address', 'joiningDate',
+          'bankDetails', 'aadhaarNumber', 'isActive', 'perMachineRate',
+          'monthlySalary', 'monthlyDays', 'employeeType', 'companyName'
+        ]);
+      allow delete: if isValidId(workerId);
+    }
+
+    match /machines/{machineId} {
+      allow get: if isValidId(machineId);
+      allow list: if request.time != null;
+      allow create: if isValidId(machineId) && isValidMachine(incoming());
+      allow update: if isValidId(machineId) &&
+        isValidMachine(incoming()) &&
+        incoming().machineId == existing().machineId &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['machineId', 'isActive', 'companyName']);
+      allow delete: if isValidId(machineId);
+    }
+
+    match /daily_works/{workId} {
+      allow get: if isValidId(workId);
+      allow list: if request.time != null;
+      allow create: if isValidId(workId) && isValidDailyWork(incoming());
+      allow update: if isValidId(workId) &&
+        isValidDailyWork(incoming()) &&
+        incoming().workId == existing().workId &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'workId', 'workerId', 'date', 'selectedMachines',
+          'machineCount', 'perMachineRate', 'calculatedWage', 'shift'
+        ]);
+      allow delete: if isValidId(workId);
+    }
+
+    match /daily_work_locks/{lockId} {
+      allow get: if isValidId(lockId);
+      allow list: if request.time != null;
+      allow create: if isValidId(lockId) &&
+        isValidDailyWorkLock(incoming()) &&
+        incoming().lockId == lockId;
+      allow update: if false;
+      allow delete: if isValidId(lockId);
+    }
+
+    match /admin_attendances/{attendanceId} {
+      allow get: if isValidId(attendanceId);
+      allow list: if request.time != null;
+      allow create: if isValidId(attendanceId) && isValidAdminAttendance(incoming());
+      allow update: if isValidId(attendanceId) &&
+        isValidAdminAttendance(incoming()) &&
+        incoming().adminAttendanceId == existing().adminAttendanceId &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'adminAttendanceId', 'workerId', 'date', 'status', 'calculatedWage', 'shift'
+        ]);
+      allow delete: if isValidId(attendanceId);
+    }
+
+    match /attendances/{attendanceId} {
+      allow get: if isValidId(attendanceId);
+      allow list: if request.time != null;
+      allow create: if isValidId(attendanceId) && isValidAttendance(incoming());
+      allow update: if isValidId(attendanceId) &&
+        isValidAttendance(incoming()) &&
+        incoming().attendanceId == existing().attendanceId &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'attendanceId', 'workerId', 'date', 'status', 'inTime', 'outTime', 'shift'
+        ]);
+      allow delete: if isValidId(attendanceId);
+    }
+
+    match /salaries/{salaryId} {
+      allow get: if isValidId(salaryId);
+      allow list: if request.time != null;
+      allow create: if isValidId(salaryId) && isValidSalary(incoming());
+      allow update: if isValidId(salaryId) &&
+        isValidSalary(incoming()) &&
+        incoming().salaryId == existing().salaryId &&
+        incoming().workerId == existing().workerId &&
+        incoming().month == existing().month &&
+        (
+          existing().status != 'Paid' ||
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['status'])
+        ) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'salaryId', 'workerId', 'month', 'baseSalary',
+          'bonus', 'advance', 'deductions', 'netSalary', 'status'
+        ]);
+      allow delete: if isValidId(salaryId);
     }
   }
 }
